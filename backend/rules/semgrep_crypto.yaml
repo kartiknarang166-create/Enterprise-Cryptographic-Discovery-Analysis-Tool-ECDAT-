@@ -1,0 +1,58 @@
+rules:
+  # ── Rule 1: MD5 hash usage via hashlib ────────────────────────────────────
+  - id: weak-hash-md5
+    patterns:
+      - pattern: hashlib.md5(...)
+    message: >
+      Use of MD5 detected. MD5 is cryptographically broken and susceptible to
+      collision attacks. Migrate to SHA-256 or SHA-3.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      algorithm: MD5
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 3
+      mosca_y: 5
+      mosca_z: 5
+
+  # ── Rule 2: RSA key generation with key size < 2048 bits ─────────────────
+  - id: weak-rsa-key-size
+    patterns:
+      - pattern: RSA.generate($SIZE)
+      - metavariable-comparison:
+          metavariable: $SIZE
+          comparison: $SIZE < 2048
+    message: >
+      RSA key size $SIZE is below the NIST minimum of 2048 bits. Keys under
+      2048 bits are vulnerable to factoring attacks. Use RSA-4096 or migrate
+      to ML-KEM (FIPS 203).
+    languages: [python]
+    severity: ERROR
+    metadata:
+      algorithm: RSA
+      category: weak-key-size
+      cwe: CWE-326
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 7
+      mosca_z: 5
+
+  # ── Rule 3: DES cipher usage (Crypto.Cipher.DES) ─────────────────────────
+  - id: insecure-des-cipher
+    patterns:
+      - pattern: DES.new(...)
+    message: >
+      Use of DES detected. DES uses a 56-bit key and has been broken since
+      1997. Replace with AES-256-GCM or ChaCha20-Poly1305.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      algorithm: DES
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 6
+      mosca_z: 5
