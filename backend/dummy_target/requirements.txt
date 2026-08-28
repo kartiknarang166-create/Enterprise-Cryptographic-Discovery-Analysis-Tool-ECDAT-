@@ -1,0 +1,2 @@
+pycrypto==2.6.1
+md5-hash==1.0.1

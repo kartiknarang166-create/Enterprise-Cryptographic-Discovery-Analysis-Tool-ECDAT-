@@ -53,7 +53,7 @@ def _severity_to_cdx(semgrep_severity: str) -> str:
     }.get(semgrep_severity.upper(), "unknown")
 
 
-def transform_semgrep_to_cyclonedx(semgrep_json: dict) -> dict:
+def transform_semgrep_to_cyclonedx(semgrep_json: dict, dependency_findings: list = None) -> dict:
     """
     Convert a Semgrep JSON result object to a CycloneDX 1.6 BOM document.
 
@@ -156,6 +156,55 @@ def transform_semgrep_to_cyclonedx(semgrep_json: dict) -> dict:
 
         components.append(component)
         logger.debug("Translated finding %s -> risk=%s", rule_id, risk_level)
+
+    # ── Append Dependency Findings ───────────────────────────────────────────
+    if dependency_findings:
+        for dep in dependency_findings:
+            component = {
+                "type": "library",
+                "bom-ref": str(uuid.uuid4()),
+                "name": dep["package"],
+                "version": "N/A",
+                "description": dep["recommendation"],
+                "evidence": {
+                    "occurrences": [
+                        {
+                            "location": dep["file"],
+                            "line": 1,
+                            "endLine": 1,
+                        }
+                    ]
+                },
+                "properties": [
+                    {"name": "ecdat:category", "value": "dependency-vulnerability"},
+                ],
+                "vulnerabilities": [
+                    {
+                        "id": f"VULN-{dep['package'].upper()}",
+                        "description": dep["recommendation"],
+                        "ratings": [
+                            {
+                                "severity": "critical",
+                                "method": "other",
+                            }
+                        ],
+                    }
+                ],
+                "mosca": {
+                    "x_years_data_sensitivity": 0,
+                    "y_years_migration_time": 0,
+                    "z_years_until_crqc": 0,
+                    "equation": "N/A",
+                    "risk_level": "CRITICAL",
+                },
+                "recommendation": {
+                    "action": dep["recommendation"],
+                    "pqc_algorithm": "",
+                    "rationale": "Vulnerable third-party dependency.",
+                    "pqc_standard": "N/A (Classical)"
+                }
+            }
+            components.append(component)
 
     # ── Assemble CycloneDX 1.6 BOM ───────────────────────────────────────────
     bom: dict = {
