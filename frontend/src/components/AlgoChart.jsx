@@ -46,20 +46,42 @@ function bucketAlgoAndStatus(name = '', component) {
   return { label: name.split('-')[0] || 'Other', status: 'safe' }
 }
 
-export default function AlgoChart({ components = [] }) {
+function algoFamily(name = '') {
+  const u = name.toUpperCase()
+  if (u.includes('RSA') || u.includes('ECDSA') || u.includes('ECDH') || u.includes('DSA') || u.includes('ECC') || u.includes('EC')) return 'asymmetric'
+  if (u.includes('AES') || u.includes('SHA') || u.includes('MD5') || u.includes('DES') || u.includes('HMAC') || u.includes('3DES') || u.includes('RC4')) return 'symmetric'
+  return 'other'
+}
+
+function getStatus(component) {
+  const risk = (component.mosca?.risk_level || '').toUpperCase()
+  const type = (component.type || '').toLowerCase()
+  if (type === 'library') return 'Critical'
+  return risk === 'CRITICAL' ? 'Critical' : risk === 'LOW' ? 'Low' : 'Unknown'
+}
+
+export default function AlgoChart({ components = [], filterMode = 'All' }) {
   const { data, totalUsages } = useMemo(() => {
+    // Apply the same filter logic as InventoryTable so the chart stays in sync
+    let subset = components
+    switch (filterMode) {
+      case 'Critical Risk':  subset = components.filter(c => getStatus(c) === 'Critical'); break
+      case 'Asymmetric':     subset = components.filter(c => algoFamily(c.name) === 'asymmetric'); break
+      case 'Symmetric/Hash': subset = components.filter(c => algoFamily(c.name) === 'symmetric'); break
+      default:               subset = components; break
+    }
+
     const counts = {}
     let total = 0
-    components.forEach(c => {
+    subset.forEach(c => {
       const { label, status } = bucketAlgoAndStatus(c.name, c)
       if (!counts[label]) counts[label] = { label, status, count: 0 }
       counts[label].count++
       total++
     })
-    // Sort by count descending
     const sorted = Object.values(counts).sort((a, b) => b.count - a.count)
     return { data: sorted, totalUsages: total }
-  }, [components])
+  }, [components, filterMode])
 
   if (data.length === 0) {
     return (

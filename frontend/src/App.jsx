@@ -1,19 +1,21 @@
 /**
  * App.jsx — ECDAT v1.0-pqc
- * Refactored to DESIGN.md system:
- *  - Surface tokens: #13131b / #1b1b23 / #292932
- *  - Typography: Inter UI, JetBrains Mono for technical data
- *  - Semantic: Rose #ffb4ab (Critical), Amber #ffb783 (Deprecated)
- *  - Radius: 4px standard, 9999px badges
- *  - Header: gap-6 nav, Zinc-100/Zinc-950 Run button, right utility gap-3
- *  - Cards: 2px solid left semantic border on Quantum-Critical + Mosca Exposure
- *  - API bindings and scanning logic unchanged
+ * Orchestrates two views:
+ *   1. Landing Page (LandingPage.jsx) — default
+ *   2. Analytics Dashboard — shown after a successful scan
+ *
+ * Key wiring:
+ *  - Landing scan result → setBom → setView('dashboard')
+ *  - "∧" footer button → toggles CycloneDX JSON overlay drawer
+ *  - activeInventoryFilter lifted to App so AlgoChart mirrors InventoryTable filter
+ *  - DESIGN.md tokens throughout
  */
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import {
-  Shield, Play, Wifi, Bell, Download,
-  Database, AlertTriangle, CheckCircle, Zap,
+  Shield, Wifi, Bell, Download, X,
+  Database, AlertTriangle, CheckCircle, Zap, Home,
 } from 'lucide-react'
+import LandingPage    from './components/LandingPage'
 import InventoryTable from './components/InventoryTable'
 import AlgoChart      from './components/AlgoChart'
 import MoscaWidget    from './components/MoscaWidget'
@@ -21,27 +23,26 @@ import './index.css'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const API_BASE       = 'http://localhost:8000'
-const SCAN_URL       = `${API_BASE}/scan`
 const HEALTH_URL     = `${API_BASE}/health`
-const DEFAULT_DIR    = './dummy_target'
 const HEALTH_POLL_MS = 15_000
+const DEFAULT_DIR    = './dummy_target'
 
 // ── DESIGN.md semantic tokens ──────────────────────────────────────────────────
 const DS = {
   bg:           '#13131b',
   surfaceLow:   '#1b1b23',
   surfaceHigh:  '#292932',
-  surfaceLow90: 'rgba(27,27,35,0.9)',
+  surfaceBright:'#393841',
   onSurface:    '#e4e1ed',
   onVariant:    '#c7c4d7',
   outline:      '#908fa0',
   outlineVar:   '#464554',
-  error:        '#ffb4ab',        // Quantum Critical / Rose
-  errorCont:    '#93000a',        // Verdict background
-  tertiary:     '#ffb783',        // Deprecated / Amber
-  primary:      '#c0c1ff',        // Primary action / indigo
-  secondary:    '#4cd7f6',        // Analytics / cyan
-  emerald:      '#6ee7b7',        // Compliant
+  error:        '#ffb4ab',
+  errorCont:    '#93000a',
+  tertiary:     '#ffb783',
+  primary:      '#c0c1ff',
+  secondary:    '#4cd7f6',
+  emerald:      '#6ee7b7',
   muted:        '#908fa0',
 }
 
@@ -66,8 +67,6 @@ function moscaDefaults(components) {
 }
 
 // ── NavTab ────────────────────────────────────────────────────────────────────
-// Active tab: full-opacity label + bottom 2px border in primary indigo.
-// Inactive: muted label, no border. Gap-6 applied at parent nav level.
 function NavTab({ label, active, onClick }) {
   return (
     <button
@@ -95,8 +94,6 @@ function NavTab({ label, active, onClick }) {
 }
 
 // ── SummaryCard ───────────────────────────────────────────────────────────────
-// leftAccent: 2px solid semantic color on left border (Rose for Critical, Amber for Mosca)
-// tag: pill badge in top-right, using 10% opacity semantic background
 function SummaryCard({
   title, subtitle, value, valueColor,
   icon: Icon, leftAccent,
@@ -115,7 +112,7 @@ function SummaryCard({
         borderTop:    `1px solid ${DS.outlineVar}`,
         borderRight:  `1px solid ${DS.outlineVar}`,
         borderBottom: `1px solid ${DS.outlineVar}`,
-        borderRadius: 4,          // DESIGN.md: 0.25rem standard
+        borderRadius: 4,
         padding: 14,
         display: 'flex',
         flexDirection: 'column',
@@ -124,7 +121,6 @@ function SummaryCard({
         position: 'relative',
       }}
     >
-      {/* Top row: title + optional top-right tag badge */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {Icon && <Icon size={13} style={{ color: leftAccent || DS.muted, flexShrink: 0 }} />}
@@ -135,44 +131,130 @@ function SummaryCard({
         {tag && (
           <span
             style={{
-              fontSize: 10,
-              fontWeight: 700,
-              padding: '2px 8px',
-              borderRadius: 9999,        // pill
-              background: tagBg,
-              color: tagColor,
-              flexShrink: 0,
-              lineHeight: '16px',
+              fontSize: 10, fontWeight: 700,
+              padding: '2px 8px', borderRadius: 9999,
+              background: tagBg, color: tagColor,
+              flexShrink: 0, lineHeight: '16px',
             }}
           >
             {tag}
           </span>
         )}
       </div>
-
-      {/* Value */}
-      <div style={{ fontSize: 22, fontWeight: 800, color: valueColor || DS.onSurface, lineHeight: 1 }}>
-        {value}
-      </div>
-
-      {/* Subtitle */}
+      <div style={{ fontSize: 22, fontWeight: 800, color: valueColor || DS.onSurface, lineHeight: 1 }}>{value}</div>
       <div style={{ fontSize: 11, color: DS.muted, marginTop: 2 }}>{subtitle}</div>
-
-      {/* Optional extra content (e.g., status badge below subtitle) */}
       {children}
     </div>
   )
 }
 
+// ── CycloneDX JSON Drawer Overlay ─────────────────────────────────────────────
+function CycloneDXDrawer({ bom, onClose }) {
+  const json = useMemo(() => JSON.stringify(bom, null, 2), [bom])
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed', inset: 0,
+          background: 'rgba(0,0,0,0.65)',
+          zIndex: 200,
+          animation: 'fadeIn 0.2s ease',
+        }}
+      />
+
+      {/* Drawer panel — slides up from bottom */}
+      <div
+        style={{
+          position: 'fixed',
+          bottom: 0, left: 0, right: 0,
+          height: '70vh',
+          background: DS.surfaceLow,
+          borderTop: `2px solid ${DS.primary}60`,
+          zIndex: 201,
+          display: 'flex',
+          flexDirection: 'column',
+          animation: 'slideUp 0.25s ease',
+        }}
+      >
+        {/* Drawer header */}
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '12px 20px',
+            borderBottom: `1px solid ${DS.outlineVar}`,
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 14, color: DS.onSurface }}>&lt;&gt;</span>
+            <span style={{ fontSize: 14, fontWeight: 700, color: DS.onSurface }}>
+              CycloneDX 1.6 CBOM — Full Schema Output
+            </span>
+            {bom?.serialNumber && (
+              <span
+                style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 11, color: DS.muted,
+                  background: DS.surfaceHigh,
+                  padding: '2px 8px', borderRadius: 4,
+                }}
+              >
+                {bom.serialNumber}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'none', border: 'none',
+              color: DS.muted, cursor: 'pointer',
+              display: 'flex', alignItems: 'center',
+            }}
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* JSON content */}
+        <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
+          <pre
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 12,
+              lineHeight: 1.6,
+              color: DS.onVariant,
+              margin: 0,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+            }}
+          >
+            {json}
+          </pre>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+        @keyframes slideUp { from { transform: translateY(100%) } to { transform: translateY(0) } }
+      `}</style>
+    </>
+  )
+}
+
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
-  const [apiStatus, setApiStatus] = useState('checking')
-  const [targetDir, setTargetDir] = useState(DEFAULT_DIR)
-  const [bom,       setBom]       = useState(null)
-  const [loading,   setLoading]   = useState(false)
-  const [error,     setError]     = useState(null)
-  const [activeTab, setActiveTab] = useState('Dashboard')
+  const [view,        setView]        = useState('landing')   // 'landing' | 'dashboard'
+  const [apiStatus,   setApiStatus]   = useState('checking')
+  const [targetDir,   setTargetDir]   = useState(DEFAULT_DIR)
+  const [bom,         setBom]         = useState(null)
+  const [activeTab,   setActiveTab]   = useState('Dashboard')
   const [searchQuery, setSearchQuery] = useState('')
+  const [bomDrawerOpen, setBomDrawerOpen] = useState(false)
+  // Lifted filter state — keeps AlgoChart in sync with InventoryTable
+  const [inventoryFilter, setInventoryFilter] = useState('All')
 
   // ── Health polling ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -190,22 +272,34 @@ export default function App() {
     return () => { cancelled = true; clearInterval(id) }
   }, [])
 
-  // ── Scan ───────────────────────────────────────────────────────────────────
+  // ── Called by LandingPage on successful scan ───────────────────────────────
+  function handleScanComplete(result, dir) {
+    setBom(result)
+    setTargetDir(dir || DEFAULT_DIR)
+    setView('dashboard')
+    setInventoryFilter('All')
+  }
+
+  // ── In-dashboard re-scan ───────────────────────────────────────────────────
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState(null)
+
   const runScan = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(SCAN_URL, {
+      const res = await fetch(`${API_BASE}/scan`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ target_directory: targetDir.trim() || DEFAULT_DIR }),
       })
       if (!res.ok) {
         let detail = `HTTP ${res.status} ${res.statusText}`
-        try { const b = await res.json(); detail = b.detail || b.message || detail } catch { /**/ }
+        try { const b = await res.json(); detail = b.detail || b.message || detail } catch { /* ignore */ }
         throw new Error(detail)
       }
       setBom(await res.json())
+      setInventoryFilter('All')
     } catch (err) {
       setError(err.message || 'Unknown error')
     } finally {
@@ -231,18 +325,22 @@ export default function App() {
   )
   const mosca = useMemo(() => moscaDefaults(components), [components])
 
-  // ── API indicator ──────────────────────────────────────────────────────────
   const apiCfg = {
     checking: { color: DS.tertiary,  label: 'Checking…'    },
     online:   { color: DS.emerald,   label: 'API Connected' },
     offline:  { color: DS.error,     label: 'API Offline'   },
   }[apiStatus]
 
+  // ── Landing view ───────────────────────────────────────────────────────────
+  if (view === 'landing') {
+    return <LandingPage onScanComplete={handleScanComplete} />
+  }
+
+  // ── Dashboard view ─────────────────────────────────────────────────────────
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: DS.bg, fontFamily: 'Inter, sans-serif' }}>
 
       {/* ════════════ TOP HEADER BAR ════════════ */}
-      {/* Height: 44px, Surface-low bg, 1px outline-variant bottom border */}
       <header
         id="app-header"
         style={{
@@ -256,10 +354,10 @@ export default function App() {
           flexShrink: 0,
           position: 'sticky',
           top: 0,
-          zIndex: 50,
+          zIndex: 100,
         }}
       >
-        {/* Logo group */}
+        {/* Logo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 16, flexShrink: 0 }}>
           <Shield size={15} color={DS.primary} strokeWidth={1.8} />
           <span style={{ fontWeight: 800, fontSize: 13, letterSpacing: '0.12em', textTransform: 'uppercase', color: DS.onSurface }}>
@@ -267,21 +365,37 @@ export default function App() {
           </span>
           <span
             style={{
-              fontSize: 10,
-              fontWeight: 700,
-              padding: '1px 6px',
-              borderRadius: 9999,          // pill
-              background: `${DS.primary}18`,
-              color: DS.primary,
-              border: `1px solid ${DS.primary}40`,
-              lineHeight: '16px',
+              fontSize: 10, fontWeight: 700,
+              padding: '1px 6px', borderRadius: 9999,
+              background: `${DS.primary}18`, color: DS.primary,
+              border: `1px solid ${DS.primary}40`, lineHeight: '16px',
             }}
           >
             v1.0-pqc
           </span>
         </div>
 
-        {/* Directory input + Run button */}
+        {/* Back to landing */}
+        <button
+          onClick={() => setView('landing')}
+          title="Back to Home"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            background: 'none', border: 'none',
+            color: DS.muted, cursor: 'pointer',
+            fontSize: 12, padding: '0 8px',
+            borderRight: `1px solid ${DS.outlineVar}`,
+            marginRight: 12,
+            transition: 'color 0.15s',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.color = DS.onVariant)}
+          onMouseLeave={e => (e.currentTarget.style.color = DS.muted)}
+        >
+          <Home size={13} />
+          Home
+        </button>
+
+        {/* Directory input + Run */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 16, flexShrink: 0 }}>
           <input
             id="input-target-directory"
@@ -305,22 +419,17 @@ export default function App() {
             onFocus={e  => (e.target.style.borderColor = DS.primary)}
             onBlur={e   => (e.target.style.borderColor = DS.outlineVar)}
           />
-          {/* Run button: Zinc-100 bg, Zinc-950 text — high contrast per DESIGN.md */}
           <button
             id="btn-run-scan"
             onClick={runScan}
             disabled={loading}
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              padding: '4px 14px',
-              borderRadius: 4,
-              background: loading ? '#52525b' : '#f4f4f5',   // Zinc-100 idle, Zinc-600 loading
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '4px 14px', borderRadius: 4,
+              background: loading ? '#52525b' : '#f4f4f5',
               border: 'none',
-              color: '#09090b',                               // Zinc-950
-              fontSize: 12,
-              fontWeight: 600,
+              color: '#09090b',
+              fontSize: 12, fontWeight: 600,
               cursor: loading ? 'not-allowed' : 'pointer',
               opacity: loading ? 0.7 : 1,
               transition: 'background 0.15s, opacity 0.15s',
@@ -334,38 +443,22 @@ export default function App() {
                 <circle cx="12" cy="12" r="10" stroke="#52525b" strokeWidth="2.5" />
                 <path d="M12 2a10 10 0 0 1 10 10" stroke="#09090b" strokeWidth="2.5" strokeLinecap="round" />
               </svg>
-            ) : (
-              <Play size={10} fill="#09090b" strokeWidth={0} />
-            )}
+            ) : null}
             {loading ? 'Scanning…' : 'Run'}
           </button>
         </div>
 
-        {/* Nav tabs — gap-6 per spec */}
-        <nav
-          style={{
-            display: 'flex',
-            alignItems: 'stretch',
-            gap: 24,                    // gap-6 = 24px
-            flexShrink: 0,
-          }}
-        >
+        {/* Nav tabs */}
+        <nav style={{ display: 'flex', alignItems: 'stretch', gap: 24, flexShrink: 0 }}>
           {['Dashboard', 'Inventory', 'Policy', 'Compliance'].map(tab => (
-            <NavTab
-              key={tab}
-              label={tab}
-              active={activeTab === tab}
-              onClick={() => setActiveTab(tab)}
-            />
+            <NavTab key={tab} label={tab} active={activeTab === tab} onClick={() => setActiveTab(tab)} />
           ))}
         </nav>
 
-        {/* Spacer */}
         <div style={{ flex: 1 }} />
 
-        {/* Right utility group — gap-3 = 12px per spec */}
+        {/* Right utilities */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-
           {/* API status */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <span
@@ -377,27 +470,21 @@ export default function App() {
                 animation: apiStatus === 'online' ? 'pulse-dot 2s ease-in-out infinite' : 'none',
               }}
             />
-            <span style={{ fontSize: 12, fontWeight: 500, color: apiCfg.color }}>
-              {apiCfg.label}
-            </span>
+            <span style={{ fontSize: 12, fontWeight: 500, color: apiCfg.color }}>{apiCfg.label}</span>
           </div>
 
-          {/* Export CycloneDX JSON */}
+          {/* Export */}
           <button
             id="btn-export-json"
             onClick={exportJson}
             disabled={!bom}
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              padding: '4px 10px',
-              borderRadius: 4,
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '4px 10px', borderRadius: 4,
               background: DS.surfaceHigh,
               border: `1px solid ${DS.outlineVar}`,
               color: bom ? DS.onVariant : DS.outline,
-              fontSize: 12,
-              fontWeight: 500,
+              fontSize: 12, fontWeight: 500,
               cursor: bom ? 'pointer' : 'not-allowed',
               opacity: bom ? 1 : 0.4,
               transition: 'border-color 0.15s, color 0.15s',
@@ -410,10 +497,9 @@ export default function App() {
             Export CycloneDX JSON
           </button>
 
-          {/* Wifi icon */}
           <Wifi size={14} color={DS.outline} />
 
-          {/* Bell + badge */}
+          {/* Bell */}
           <div style={{ position: 'relative' }}>
             <Bell size={14} color={DS.outline} />
             {critical > 0 && (
@@ -421,8 +507,7 @@ export default function App() {
                 style={{
                   position: 'absolute', top: -4, right: -4,
                   width: 14, height: 14, borderRadius: '50%',
-                  background: DS.error,
-                  color: '#690005',
+                  background: DS.error, color: '#690005',
                   fontSize: 8, fontWeight: 800,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                 }}
@@ -450,26 +535,16 @@ export default function App() {
       </header>
 
       {/* ════════════ MAIN CONTENT ════════════ */}
-      <main
-        style={{
-          flex: 1, display: 'flex', flexDirection: 'column',
-          padding: '12px 16px 0',
-          gap: 12,
-        }}
-      >
+      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '12px 16px 0', gap: 12 }}>
 
         {/* Error banner */}
         {error && (
           <div
             style={{
               display: 'flex', alignItems: 'center', gap: 10,
-              padding: '8px 14px',
-              borderRadius: 4,
-              background: `${DS.error}14`,
-              border: `1px solid ${DS.error}50`,
-              color: DS.error,
-              fontSize: 12,
-              animation: 'fade-up 0.25s ease both',
+              padding: '8px 14px', borderRadius: 4,
+              background: `${DS.error}14`, border: `1px solid ${DS.error}50`,
+              color: DS.error, fontSize: 12,
             }}
           >
             <AlertTriangle size={13} style={{ flexShrink: 0 }} />
@@ -484,15 +559,7 @@ export default function App() {
         )}
 
         {/* ── 4 Summary Cards ── */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(4, 1fr)',
-            gap: 12,
-            animation: 'fade-up 0.4s ease both',
-          }}
-        >
-          {/* Card 1: Total Assets — no left accent */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, animation: 'fade-up 0.4s ease both' }}>
           <SummaryCard
             title="Total Cryptographic Assets"
             subtitle="Scanned from AST & Manifests"
@@ -500,8 +567,6 @@ export default function App() {
             valueColor={DS.onSurface}
             icon={Database}
           />
-
-          {/* Card 2: Quantum-Critical — Rose 2px left border */}
           <SummaryCard
             title="Quantum-Critical Assets"
             subtitle="Immediate migration recommended"
@@ -510,11 +575,9 @@ export default function App() {
             icon={AlertTriangle}
             leftAccent={DS.error}
             tag={bom && critical > 0 ? 'RSA/ECC' : undefined}
-            tagBg={`${DS.error}1a`}       /* 10% opacity Rose */
+            tagBg={`${DS.error}1a`}
             tagColor={DS.error}
           />
-
-          {/* Card 3: CBOM Standard */}
           <SummaryCard
             title="CBOM Standard"
             subtitle="(cryptographic-asset)"
@@ -522,45 +585,33 @@ export default function App() {
             valueColor={DS.secondary}
             icon={CheckCircle}
           />
-
-          {/* Card 4: Mosca Exposure — Amber 2px left border */}
+          {/* Mosca Card */}
           <div
             style={{
               background: DS.surfaceLow,
               borderLeft: `2px solid ${DS.tertiary}`,
-              borderTop:    `1px solid ${DS.outlineVar}`,
-              borderRight:  `1px solid ${DS.outlineVar}`,
+              borderTop: `1px solid ${DS.outlineVar}`,
+              borderRight: `1px solid ${DS.outlineVar}`,
               borderBottom: `1px solid ${DS.outlineVar}`,
-              borderRadius: 4,
-              padding: 14,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 6,
-              minHeight: 90,
+              borderRadius: 4, padding: 14,
+              display: 'flex', flexDirection: 'column', gap: 6, minHeight: 90,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Zap size={13} style={{ color: DS.tertiary, flexShrink: 0 }} />
-                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: DS.muted }}>
-                  Mosca Exposure
-                </span>
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Zap size={13} style={{ color: DS.tertiary }} />
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: DS.muted }}>
+                Mosca Exposure
+              </span>
             </div>
             <div style={{ fontSize: 22, fontWeight: 800, color: DS.onSurface, lineHeight: 1 }}>
               {hasExposure ? 'Active' : 'Low'}
             </div>
-            {/* "Active Quantum Exposure" pill badge — 10% Amber bg */}
             <span
               style={{
-                alignSelf: 'flex-start',
-                fontSize: 10,
-                fontWeight: 700,
-                padding: '2px 8px',
-                borderRadius: 9999,
+                alignSelf: 'flex-start', fontSize: 10, fontWeight: 700,
+                padding: '2px 8px', borderRadius: 9999, lineHeight: '16px',
                 background: hasExposure ? `${DS.tertiary}1a` : `${DS.emerald}1a`,
                 color: hasExposure ? DS.tertiary : DS.emerald,
-                lineHeight: '16px',
               }}
             >
               {hasExposure ? 'Active Quantum Exposure' : 'Low Exposure'}
@@ -569,65 +620,42 @@ export default function App() {
           </div>
         </div>
 
-        {/* ── Stacked Vertical Main Layout ── */}
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 12,
-            flex: 1,
-            minHeight: 0,
-            animation: 'fade-up 0.5s ease 0.1s both',
-            width: '100%',
-          }}
-        >
+        {/* ── Stacked content ── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', animation: 'fade-up 0.5s ease 0.1s both' }}>
+
           {/* Cryptographic Inventory */}
           <div
             style={{
-              width: '100%',
-              background: DS.surfaceLow,
-              border: `1px solid ${DS.outlineVar}`,
-              borderRadius: 4,
-              padding: 14,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 12,
+              width: '100%', background: DS.surfaceLow,
+              border: `1px solid ${DS.outlineVar}`, borderRadius: 4,
+              padding: 14, display: 'flex', flexDirection: 'column', gap: 12,
             }}
           >
-            <h2 style={{ fontSize: 14, fontWeight: 600, color: DS.onSurface, flexShrink: 0 }}>
+            <h2 style={{ fontSize: 14, fontWeight: 600, color: DS.onSurface }}>
               Cryptographic Inventory
             </h2>
 
-            {/* Search Bar */}
+            {/* Search */}
             <input
               type="text"
               placeholder="Search assets..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               style={{
-                width: '100%',
-                background: DS.surfaceHigh,
-                border: `1px solid ${DS.outlineVar}`,
-                borderRadius: 4,
-                color: DS.onSurface,
-                padding: '6px 12px',
-                fontSize: 13,
-                outline: 'none',
+                width: '100%', background: DS.surfaceHigh,
+                border: `1px solid ${DS.outlineVar}`, borderRadius: 4,
+                color: DS.onSurface, padding: '6px 12px',
+                fontSize: 13, outline: 'none', boxSizing: 'border-box',
               }}
             />
 
-            {/* Empty state */}
-            {!bom && !loading && (
+            {!bom && (
               <div style={{ padding: '20px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: DS.outline }}>
                 <Shield size={28} strokeWidth={1.2} />
-                <p style={{ fontSize: 12, textAlign: 'center' }}>
-                  Enter a target directory and click{' '}
-                  <span style={{ color: DS.primary }}>Run</span> to scan
-                </p>
+                <p style={{ fontSize: 12, textAlign: 'center' }}>Run a scan to see results</p>
               </div>
             )}
 
-            {/* Loading state */}
             {loading && (
               <div style={{ padding: '20px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: DS.primary }}>
                 <svg style={{ width: 18, height: 18, animation: 'spin-slow 1s linear infinite' }} viewBox="0 0 24 24" fill="none">
@@ -638,77 +666,110 @@ export default function App() {
               </div>
             )}
 
-            {/* Inventory table */}
             {bom && !loading && (
               <div style={{ width: '100%', overflowX: 'auto' }}>
-                <InventoryTable components={components} searchQuery={searchQuery} />
+                <InventoryTable
+                  components={components}
+                  searchQuery={searchQuery}
+                  onFilterChange={setInventoryFilter}
+                />
               </div>
             )}
           </div>
 
-          {/* Algorithm Breakdown */}
+          {/* Algorithm Breakdown — mirrors inventory filter */}
           <div
             style={{
-              width: '100%',
-              background: DS.surfaceLow,
-              border: `1px solid ${DS.outlineVar}`,
-              borderRadius: 4,
+              width: '100%', background: DS.surfaceLow,
+              border: `1px solid ${DS.outlineVar}`, borderRadius: 4,
               padding: 14,
             }}
           >
-            <AlgoChart components={components} />
+            <AlgoChart components={components} filterMode={inventoryFilter} />
           </div>
 
           {/* Mosca Widget */}
-          <div
-            style={{
-              width: '100%',
-            }}
-          >
-            <MoscaWidget
-              initialX={mosca.x}
-              initialY={mosca.y}
-              initialZ={mosca.z}
-            />
+          <div style={{ width: '100%' }}>
+            <MoscaWidget initialX={mosca.x} initialY={mosca.y} initialZ={mosca.z} />
           </div>
         </div>
       </main>
 
-      {/* ════════════ FOOTER (Cyclone DX 1.6 Output Bar) ════════════ */}
+      {/* ════════════ STICKY FOOTER — CycloneDX Output Bar ════════════ */}
       <footer
         style={{
           background: DS.surfaceHigh,
-          borderTop: `1px solid ${DS.outlineVar}`,
-          padding: '12px 16px',
+          borderTop: `2px solid ${DS.primary}40`,
+          padding: '10px 20px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           flexShrink: 0,
           position: 'sticky',
           bottom: 0,
-          zIndex: 50,
+          zIndex: 100,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 14, fontWeight: 'bold', color: DS.onSurface }}>&lt;&gt;</span>
-          <span style={{ fontSize: 14, fontWeight: 'bold', color: DS.onSurface }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 15, fontWeight: 800, color: DS.secondary }}>&lt;&gt;</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: DS.onSurface }}>
             CycloneDX 1.6 Standardized Schema Output
           </span>
+          {bom && (
+            <span
+              style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 11, color: DS.muted,
+                background: DS.surfaceLow,
+                padding: '2px 8px', borderRadius: 4,
+                border: `1px solid ${DS.outlineVar}`,
+              }}
+            >
+              {bom.serialNumber}
+            </span>
+          )}
         </div>
-        {bom && (
-          <span
-            style={{
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 13,
-              fontWeight: 'bold',
-              color: DS.onVariant,
-            }}
-          >
-            {bom.serialNumber}
-          </span>
-        )}
-        <span style={{ fontSize: 14, fontWeight: 'bold', color: DS.onVariant }}>∧</span>
+
+        {/* ∧ Toggle button — opens drawer */}
+        <button
+          id="btn-cdx-drawer-toggle"
+          onClick={() => { if (bom) setBomDrawerOpen(v => !v) }}
+          disabled={!bom}
+          title={bom ? 'View full CycloneDX JSON output' : 'Run a scan first'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: bom ? `${DS.primary}14` : 'transparent',
+            border: `1px solid ${bom ? `${DS.primary}40` : DS.outlineVar}`,
+            borderRadius: 4, padding: '4px 12px',
+            color: bom ? DS.primary : DS.muted,
+            fontSize: 13, fontWeight: 700,
+            cursor: bom ? 'pointer' : 'not-allowed',
+            opacity: bom ? 1 : 0.4,
+            transition: 'all 0.15s',
+          }}
+          onMouseEnter={e => { if (bom) { e.currentTarget.style.background = `${DS.primary}28`; e.currentTarget.style.borderColor = `${DS.primary}70` } }}
+          onMouseLeave={e => { if (bom) { e.currentTarget.style.background = `${DS.primary}14`; e.currentTarget.style.borderColor = `${DS.primary}40` } }}
+        >
+          <span style={{ fontSize: 16, lineHeight: 1 }}>{bomDrawerOpen ? '∨' : '∧'}</span>
+          <span style={{ fontSize: 12 }}>View JSON</span>
+        </button>
       </footer>
+
+      {/* CycloneDX Drawer */}
+      {bomDrawerOpen && bom && (
+        <CycloneDXDrawer bom={bom} onClose={() => setBomDrawerOpen(false)} />
+      )}
+
+      <style>{`
+        @keyframes spin-slow { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
+        @keyframes pulse-dot {
+          0%, 100% { opacity: 1 } 50% { opacity: 0.4 }
+        }
+        @keyframes fade-up {
+          from { opacity: 0; transform: translateY(8px) }
+          to   { opacity: 1; transform: translateY(0) }
+        }
+      `}</style>
     </div>
   )
 }

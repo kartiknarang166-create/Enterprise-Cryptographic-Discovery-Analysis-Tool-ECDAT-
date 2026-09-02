@@ -119,8 +119,13 @@ function filterStyle(f, active) {
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
-export default function InventoryTable({ components = [], searchQuery = '' }) {
+export default function InventoryTable({ components = [], searchQuery = '', onFilterChange }) {
   const [activeFilter, setActiveFilter] = useState('All')
+
+  function handleFilterChange(f) {
+    setActiveFilter(f)
+    if (onFilterChange) onFilterChange(f)
+  }
 
   const filtered = useMemo(() => {
     let result = components
@@ -150,7 +155,7 @@ export default function InventoryTable({ components = [], searchQuery = '' }) {
         {FILTERS.map(f => (
           <button
             key={f}
-            onClick={() => setActiveFilter(f)}
+            onClick={() => handleFilterChange(f)}
             style={{
               padding: '3px 10px',
               borderRadius: 4,
