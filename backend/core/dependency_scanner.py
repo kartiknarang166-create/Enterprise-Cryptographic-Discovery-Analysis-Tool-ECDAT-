@@ -1,9 +1,12 @@
 """
 core/dependency_scanner.py
-Parses manifest files (requirements.txt, package.json) for known vulnerable cryptographic dependencies.
+Parses manifest files (requirements.txt, package.json) for known vulnerable
+cryptographic dependencies. Pure Python — no Go binaries required.
 """
-import os
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 VULNERABLE_LIBS = {
     "pycrypto": "Deprecated and vulnerable to block collisions. Migrate to the `cryptography` standard library.",
@@ -30,8 +33,8 @@ def scan_dependencies(target_directory: str) -> list:
                             "file": "requirements.txt",
                             "recommendation": recommendation,
                         })
-        except Exception as e:
-            pass
+        except Exception as exc:
+            logger.warning("Could not parse requirements.txt at %s: %s", req_path, exc)
 
     # Check package.json
     pkg_path = target / "package.json"
@@ -46,7 +49,7 @@ def scan_dependencies(target_directory: str) -> list:
                             "file": "package.json",
                             "recommendation": recommendation,
                         })
-        except Exception as e:
-            pass
+        except Exception as exc:
+            logger.warning("Could not parse package.json at %s: %s", pkg_path, exc)
 
     return findings

@@ -229,7 +229,8 @@ def transform_semgrep_to_cyclonedx(semgrep_json: dict, dependency_findings: list
         },
         "components": components,
         "summary": {
-            "total_findings": len(findings),
+            # total_findings counts all components: Semgrep AST findings + SCA dependency findings
+            "total_findings": len(components),
             "critical_count": sum(
                 1 for c in components if c["mosca"]["risk_level"] == "CRITICAL"
             ),

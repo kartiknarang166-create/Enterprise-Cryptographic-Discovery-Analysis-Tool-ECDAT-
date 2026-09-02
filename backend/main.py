@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.scanner import run_semgrep_scan
 from core.translator import transform_semgrep_to_cyclonedx
+from core.dependency_scanner import scan_dependencies
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -98,9 +99,9 @@ async def health() -> HealthResponse:
 async def scan(request: ScanRequest) -> dict:
     """
     1. Resolve the *target_directory* relative to the backend root.
-    2. Execute ``semgrep`` via the async scanner.
-    3. Transform raw findings into a CycloneDX 1.6 BOM.
-    4. Return the BOM JSON.
+    2. Execute ``semgrep`` via the async scanner (AST / crypto-primitive analysis).
+    3. Run the native Python SCA scanner against manifest files in the same directory.
+    4. Merge both result sets into a single CycloneDX 1.6 BOM and return it.
     """
     # Resolve the path relative to the backend directory
     backend_root = Path(__file__).parent
@@ -114,7 +115,7 @@ async def scan(request: ScanRequest) -> dict:
             detail=f"Target path does not exist: {target}",
         )
 
-    # ── Step 1: Run Semgrep ──────────────────────────────────────────────────
+    # ── Step 3 (AST): Run Semgrep ────────────────────────────────────────────
     semgrep_result = await run_semgrep_scan(str(target))
 
     if semgrep_result.get("error"):
@@ -123,12 +124,19 @@ async def scan(request: ScanRequest) -> dict:
             detail=semgrep_result.get("message", "Scanner error"),
         )
 
-    # ── Step 2: Transform to CycloneDX ──────────────────────────────────────
-    bom = transform_semgrep_to_cyclonedx(semgrep_result)
+    # ── Step 4 (SCA): Scan third-party dependency manifests ──────────────────
+    dependency_findings = scan_dependencies(str(target))
+    logger.info(
+        "SCA complete — %d vulnerable dependency finding(s)",
+        len(dependency_findings),
+    )
+
+    # ── Merge & translate to CycloneDX ───────────────────────────────────────
+    bom = transform_semgrep_to_cyclonedx(semgrep_result, dependency_findings)
 
     logger.info(
-        "Scan complete — %d finding(s), %d CRITICAL",
-        bom["summary"]["total_findings"],
+        "Scan complete — %d total component(s), %d CRITICAL",
+        len(bom["components"]),
         bom["summary"]["critical_count"],
     )
 

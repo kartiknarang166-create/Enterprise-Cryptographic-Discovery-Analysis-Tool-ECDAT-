@@ -1,65 +1,79 @@
-@import "tailwindcss";
-
-/* ── Google Fonts ── */
+/* ── Google Fonts — must precede @import "tailwindcss" ── */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-/* ── Design tokens ── */
+@import "tailwindcss";
+
+/* ════════════════════════════════════════════════════════
+   DESIGN.md tokens — Cryptographic Integrity System
+   ════════════════════════════════════════════════════════ */
 :root {
-  --bg-base:       #080c14;
-  --bg-surface:    #0d1628;
-  --bg-card:       #111c35;
-  --bg-card-hover: #162040;
-  --border:        rgba(99, 179, 237, 0.12);
-  --border-glow:   rgba(99, 179, 237, 0.35);
-  --accent-blue:   #63b3ed;
-  --accent-cyan:   #76e4f7;
-  --accent-purple: #b794f4;
-  --accent-rose:   #fc8181;
-  --accent-green:  #68d391;
-  --text-primary:  #e2e8f0;
-  --text-secondary:#94a3b8;
-  --text-muted:    #4a5568;
-  --critical:      #fc8181;
-  --low:           #68d391;
-  --gradient-hero: linear-gradient(135deg, #0d1628 0%, #0a0f1e 50%, #080c14 100%);
+  /* Surfaces */
+  --bg:                    #13131b;
+  --surface-low:           #1b1b23;   /* cards / containers  */
+  --surface-high:          #292932;   /* popovers / inputs   */
+  --surface-lowest:        #0d0d15;   /* deepest inset       */
+  --surface-bright:        #393841;
+
+  /* On-surface text */
+  --on-surface:            #e4e1ed;
+  --on-surface-variant:    #c7c4d7;
+  --outline:               #908fa0;
+  --outline-variant:       #464554;
+
+  /* Semantic — exact DESIGN.md values */
+  --error:                 #ffb4ab;   /* Quantum Critical / Rose  */
+  --error-container:       #93000a;   /* solid Rose verdict bg    */
+  --on-error:              #690005;
+  --tertiary:              #ffb783;   /* Deprecated / Amber       */
+  --tertiary-container:    #d97721;
+
+  /* Primary / Secondary */
+  --primary:               #c0c1ff;
+  --secondary:             #4cd7f6;
+
+  /* Legacy aliases kept so existing inline refs still resolve */
+  --accent-blue:           #c0c1ff;
+  --accent-cyan:           #4cd7f6;
+  --accent-purple:         #b794f4;
+  --accent-rose:           #ffb4ab;
+  --accent-green:          #68d391;
+  --accent-orange:         #ffb783;
+  --text-primary:          #e4e1ed;
+  --text-secondary:        #c7c4d7;
+  --text-muted:            #908fa0;
+  --critical:              #ffb4ab;
+  --deprecated:            #ffb783;
+  --low:                   #68d391;
 }
 
+/* ── Reset ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
 html { scroll-behavior: smooth; }
 
 body {
   font-family: 'Inter', sans-serif;
-  background: var(--bg-base);
-  color: var(--text-primary);
+  background: var(--bg);
+  color: var(--on-surface);
   min-height: 100vh;
   overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* ── Scrollbar ── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--bg-base); }
-::-webkit-scrollbar-thumb { background: var(--border-glow); border-radius: 3px; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--outline-variant); border-radius: 3px; }
 
 /* ── Keyframes ── */
-@keyframes pulse-ring {
-  0%   { transform: scale(1);    opacity: 0.6; }
-  50%  { transform: scale(1.08); opacity: 0.9; }
-  100% { transform: scale(1);    opacity: 0.6; }
-}
-@keyframes scan-line {
-  0%   { top: 0; }
-  100% { top: 100%; }
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1;   transform: scale(1);    }
+  50%       { opacity: 0.5; transform: scale(0.8);  }
 }
 @keyframes fade-up {
-  from { opacity: 0; transform: translateY(18px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-@keyframes shimmer {
-  0%   { background-position: -200% center; }
-  100% { background-position:  200% center; }
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0);    }
 }
 @keyframes spin-slow {
-  from { transform: rotate(0deg); }
+  from { transform: rotate(0deg);   }
   to   { transform: rotate(360deg); }
 }
