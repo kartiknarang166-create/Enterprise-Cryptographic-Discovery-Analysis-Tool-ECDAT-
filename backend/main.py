@@ -112,7 +112,7 @@ def _clone_repo(url: str, dest: Path) -> None:
     logger.info("Cloning remote repository: %s → %s", url, dest)
     try:
         subprocess.run(
-            ["git", "clone", "--depth=1", url, str(dest)],
+            ["git", "clone", "--depth=1", "--single-branch", url, str(dest)],
             capture_output=True,
             text=True,
             timeout=120,

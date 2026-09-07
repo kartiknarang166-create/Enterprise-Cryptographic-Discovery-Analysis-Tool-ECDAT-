@@ -10,7 +10,7 @@
  *  - activeInventoryFilter lifted to App so AlgoChart mirrors InventoryTable filter
  *  - DESIGN.md tokens throughout
  */
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   Shield, Wifi, Bell, Download, X,
   Database, AlertTriangle, CheckCircle, Zap, Home,
@@ -292,15 +292,32 @@ export default function App() {
   // ── In-dashboard re-scan ───────────────────────────────────────────────────
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState(null)
+  const [elapsed, setElapsed] = useState(0)
+  const timerRef = useRef(null)
+
+  useEffect(() => {
+    if (loading) {
+      setElapsed(0)
+      timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000)
+    } else {
+      clearInterval(timerRef.current)
+    }
+    return () => clearInterval(timerRef.current)
+  }, [loading])
+
+  const SCAN_TIMEOUT_MS = 300_000  // 5 minutes — matches backend SCAN_TIMEOUT_SECONDS
 
   const runScan = useCallback(async () => {
     setLoading(true)
     setError(null)
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS)
     try {
       const res = await fetch(`${API_BASE}/scan`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ target_directory: targetDir.trim() || DEFAULT_DIR }),
+        signal:  controller.signal,
       })
       if (!res.ok) {
         // API returned an error (4xx / 5xx) — extract and surface the detail
@@ -315,7 +332,9 @@ export default function App() {
       setBom(await res.json())
       setInventoryFilter('All')
     } catch (err) {
-      if (err instanceof TypeError) {
+      if (err.name === 'AbortError') {
+        setError(`Scan timed out after ${Math.round(SCAN_TIMEOUT_MS / 60000)} minutes. The repository may be too large. Try a smaller repo.`)
+      } else if (err instanceof TypeError) {
         // Network-level failure (backend went offline mid-session) — use fallback
         console.warn('Backend unreachable, using fallback data:', err.message)
         setBom(FALLBACK_BOM)
@@ -324,6 +343,7 @@ export default function App() {
         setError(err.message || 'An unexpected error occurred.')
       }
     } finally {
+      clearTimeout(timeoutId)
       setLoading(false)
     }
   }, [targetDir])

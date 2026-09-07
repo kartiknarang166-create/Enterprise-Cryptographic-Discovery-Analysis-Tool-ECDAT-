@@ -5,7 +5,7 @@
  *  - Codebase scanner entry point with preset chips
  *  - Scan execution → routes to dashboard on success
  */
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Shield, Search, Zap, GitBranch, Lock, AlertTriangle, CheckCircle, ArrowRight, Cpu } from 'lucide-react'
 import { FALLBACK_BOM } from '../fallbackData'
 
@@ -78,6 +78,8 @@ export default function LandingPage({ onScanComplete }) {
   const [targetDir, setTargetDir] = useState('./dummy_target')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [elapsed, setElapsed] = useState(0)    // seconds since scan started
+  const timerRef = useRef(null)
 
   function handleModeSwitch(mode) {
     setInputMode(mode)
@@ -88,15 +90,31 @@ export default function LandingPage({ onScanComplete }) {
     ? 'Upload or enter local directory path (e.g., ./dummy_target)'
     : 'https://github.com/example/sample-crypto-app'
 
+  // Tick elapsed seconds while loading
+  useEffect(() => {
+    if (loading) {
+      setElapsed(0)
+      timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000)
+    } else {
+      clearInterval(timerRef.current)
+    }
+    return () => clearInterval(timerRef.current)
+  }, [loading])
+
+  const SCAN_TIMEOUT_MS = 300_000  // 5 minutes — matches backend SCAN_TIMEOUT_SECONDS
+
   async function handleScan() {
     if (!targetDir.trim()) return
     setLoading(true)
     setError(null)
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS)
     try {
       const res = await fetch(`http://${window.location.hostname}:8000/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_directory: targetDir.trim() }),
+        signal: controller.signal,
       })
       if (!res.ok) {
         // API returned an error (4xx / 5xx) — extract and surface the detail
@@ -111,7 +129,9 @@ export default function LandingPage({ onScanComplete }) {
       const bom = await res.json()
       onScanComplete(bom, targetDir.trim())
     } catch (err) {
-      if (err instanceof TypeError) {
+      if (err.name === 'AbortError') {
+        setError(`Scan timed out after ${Math.round(SCAN_TIMEOUT_MS / 60000)} minutes. The repository may be too large. Try a smaller repo or a specific subdirectory.`)
+      } else if (err instanceof TypeError) {
         // Network-level failure (backend is offline) — silently use fallback
         console.warn('Backend unreachable, using fallback data:', err.message)
         onScanComplete(FALLBACK_BOM, targetDir.trim() || './dummy_target')
@@ -120,6 +140,7 @@ export default function LandingPage({ onScanComplete }) {
         setError(err.message || 'An unexpected error occurred.')
       }
     } finally {
+      clearTimeout(timeoutId)
       setLoading(false)
     }
   }
@@ -381,7 +402,12 @@ export default function LandingPage({ onScanComplete }) {
                   <circle cx="12" cy="12" r="10" stroke="#6b7280" strokeWidth="2.5" />
                   <path d="M12 2a10 10 0 0 1 10 10" stroke="#9ca3af" strokeWidth="2.5" strokeLinecap="round" />
                 </svg>
-                Scanning — analysing cryptographic surface…
+                {elapsed < 5
+                  ? 'Initiating scan…'
+                  : elapsed < 30
+                  ? `Cloning repository… (${elapsed}s)`
+                  : `Scanning cryptographic surface… (${elapsed}s)`
+                }
               </>
             ) : (
               <>

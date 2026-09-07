@@ -43,7 +43,9 @@ logger = logging.getLogger(__name__)
 # it simultaneously, giving us multi-language coverage in a single subprocess call.
 _RULES_DIR = (Path(__file__).parent.parent / "rules").resolve()
 
-SCAN_TIMEOUT_SECONDS = 120
+# Total wall-clock budget for the entire Semgrep process.
+# Large repos (e.g., BenchmarkJava ~12k files) need more time.
+SCAN_TIMEOUT_SECONDS = 300   # 5 minutes
 
 
 # ── Semgrep executable resolution ────────────────────────────────────────────
@@ -194,9 +196,12 @@ async def run_semgrep_scan(target_path: str) -> dict:
     cmd = [
         *semgrep_prefix,
         "scan",
-        "--config", str(_RULES_DIR),   # directory → all *.yaml loaded at once
+        "--config",    str(_RULES_DIR),   # directory → all *.yaml loaded at once
         "--json",
-        "--no-git-ignore",              # scan regardless of .gitignore
+        "--no-git-ignore",                 # scan regardless of .gitignore
+        "--timeout",   "30",               # per-file rule timeout (sec); prevents single-rule hangs
+        "--jobs",      "4",                # parallel workers — speeds up large repos
+        "--max-memory", "2000",            # MB cap; prevents OOM on huge repos
         str(target),
     ]
 
