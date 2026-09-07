@@ -98,19 +98,9 @@ export default function InventoryPanel({ components = [], onClose }) {
   const [sortAsc,    setSortAsc]    = useState(true)
   const [page,       setPage]       = useState(1)
 
-  // Close on Escape key
-  useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  // Prevent body scroll
-  useEffect(() => {
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => { document.body.style.overflow = prev }
-  }, [])
+  // Close on Escape key - no longer needed since it's a normal tab
+  
+  // Prevent body scroll - no longer needed since it's a normal tab
 
   // Enrich components with derived fields once
   const enriched = useMemo(() => components.map(c => ({
@@ -192,31 +182,23 @@ export default function InventoryPanel({ components = [], onClose }) {
   }
 
   return (
-    <>
-      {/* Backdrop — starts below the header */}
-      <div
-        onClick={onClose}
-        style={{
-          position: 'fixed',
-          top: 44, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0,0,0,0.65)',
-          zIndex: 98,
-          animation: 'fadeInPanel 0.2s ease',
-        }}
-      />
-
-      {/* Panel — slides down from below the sticky header */}
+    <div
+      style={{
+        padding: '20px 0',
+        display: 'flex',
+        flexDirection: 'column',
+        height: 'calc(100vh - 120px)', // Adjust height for header/footer
+      }}
+    >
       <div
         style={{
-          position: 'fixed',
-          top: 44, left: 0, right: 0,
-          bottom: 0,
+          flex: 1,
           background: DS.bg,
-          borderBottom: `2px solid ${DS.primary}50`,
-          zIndex: 99,
+          border: `1px solid ${DS.outlineVar}`,
+          borderRadius: 6,
           display: 'flex',
           flexDirection: 'column',
-          animation: 'slideDownPanel 0.28s cubic-bezier(0.16,1,0.3,1)',
+          overflow: 'hidden',
         }}
       >
         {/* ── Panel Header ── */}
@@ -244,9 +226,7 @@ export default function InventoryPanel({ components = [], onClose }) {
               </div>
             </div>
           </div>
-
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {/* CSV Export */}
             <button
               id="btn-inventory-export-csv"
               onClick={exportCSV}
@@ -263,24 +243,6 @@ export default function InventoryPanel({ components = [], onClose }) {
             >
               <Download size={12} />
               Export CSV
-            </button>
-
-            {/* Close */}
-            <button
-              id="btn-inventory-close"
-              onClick={onClose}
-              style={{
-                width: 30, height: 30, borderRadius: 6,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: DS.surfaceHigh,
-                border: `1px solid ${DS.outlineVar}`,
-                color: DS.muted, cursor: 'pointer',
-                transition: 'background 0.15s, color 0.15s',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.background = `${DS.error}20`; e.currentTarget.style.color = DS.error }}
-              onMouseLeave={e => { e.currentTarget.style.background = DS.surfaceHigh; e.currentTarget.style.color = DS.muted }}
-            >
-              <X size={14} />
             </button>
           </div>
         </div>
@@ -479,16 +441,6 @@ export default function InventoryPanel({ components = [], onClose }) {
           )}
         </div>
       </div>
-
-      <style>{`
-        @keyframes fadeInPanel {
-          from { opacity: 0 } to { opacity: 1 }
-        }
-        @keyframes slideDownPanel {
-          from { transform: translateY(-100%) }
-          to   { transform: translateY(0) }
-        }
-      `}</style>
-    </>
+    </div>
   )
 }

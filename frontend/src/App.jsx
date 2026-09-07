@@ -288,7 +288,6 @@ export default function App() {
   const [activeTab,   setActiveTab]   = useState('Dashboard')
   const [searchQuery, setSearchQuery] = useState('')
   const [bomDrawerOpen, setBomDrawerOpen] = useState(false)
-  const [inventoryPanelOpen, setInventoryPanelOpen] = useState(false)
   const [inventoryFilter, setInventoryFilter] = useState('All')
 
   // ── Auth: check session on mount, subscribe to changes ─────────────────────
@@ -466,13 +465,7 @@ export default function App() {
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: DS.bg, fontFamily: 'Inter, sans-serif' }}>
 
-      {/* InventoryPanel overlay */}
-      {inventoryPanelOpen && (
-        <InventoryPanel
-          components={components}
-          onClose={() => setInventoryPanelOpen(false)}
-        />
-      )}
+      {/* (InventoryPanel is now rendered as a normal tab inside main content) */}
 
       {/* ════════════ TOP HEADER BAR ════════════ */}
       <header
@@ -588,15 +581,8 @@ export default function App() {
             <NavTab
               key={tab}
               label={tab}
-              active={activeTab === tab && tab !== 'Inventory'}
-              onClick={() => {
-                if (tab === 'Inventory') {
-                  // Open as overlay panel instead of switching tab content
-                  setInventoryPanelOpen(true)
-                } else {
-                  setActiveTab(tab)
-                }
-              }}
+              active={activeTab === tab}
+              onClick={() => setActiveTab(tab)}
             />
           ))}
         </nav>
@@ -731,6 +717,11 @@ export default function App() {
           />
         )}
 
+        {/* ── Inventory Tab ── */}
+        {activeTab === 'Inventory' && (
+          <InventoryPanel components={components} />
+        )}
+
         {/* ── Dashboard Tab ── */}
         {activeTab === 'Dashboard' && (
           <>
@@ -795,7 +786,7 @@ export default function App() {
                   </h2>
                   {bom && (
                     <button
-                      onClick={() => setInventoryPanelOpen(true)}
+                      onClick={() => setActiveTab('Inventory')}
                       style={{
                         fontSize: 12, fontWeight: 600,
                         color: DS.primary, background: `${DS.primary}12`,
