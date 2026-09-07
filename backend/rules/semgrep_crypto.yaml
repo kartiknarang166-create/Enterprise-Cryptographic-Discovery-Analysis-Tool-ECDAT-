@@ -56,3 +56,201 @@ rules:
       mosca_x: 5
       mosca_y: 6
       mosca_z: 5
+
+  # ── Critical (Quantum Vulnerable) ──────────────────────────────────────────
+  - id: ecdsa-usage
+    patterns:
+      - pattern: ecdsa.SigningKey.generate(...)
+    message: >
+      ECDSA is vulnerable to quantum attacks (Shor's algorithm). Migrate to ML-DSA (FIPS 204).
+    languages: [python]
+    severity: WARNING
+    metadata:
+      algorithm: ECDSA
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 5
+      mosca_z: 7
+
+  - id: dh-usage
+    patterns:
+      - pattern: cryptography.hazmat.primitives.asymmetric.dh.generate_parameters(...)
+    message: >
+      Diffie-Hellman key exchange is quantum-vulnerable. Migrate to ML-KEM (FIPS 203).
+    languages: [python]
+    severity: WARNING
+    metadata:
+      algorithm: DH
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 7
+      mosca_y: 3
+      mosca_z: 7
+
+  - id: ed25519-usage
+    patterns:
+      - pattern: ed25519.Ed25519PrivateKey.generate()
+    message: >
+      Ed25519 is quantum-vulnerable. Migrate to ML-DSA (FIPS 204).
+    languages: [python]
+    severity: WARNING
+    metadata:
+      algorithm: ED25519
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 10
+      mosca_y: 3
+      mosca_z: 7
+
+  - id: rsa-quantum-vulnerable
+    patterns:
+      - pattern: RSA.generate($SIZE)
+      - metavariable-comparison:
+          metavariable: $SIZE
+          comparison: $SIZE >= 2048
+    message: >
+      RSA >= 2048 is classically secure but quantum-vulnerable. Migrate to ML-KEM (FIPS 203).
+    languages: [python]
+    severity: WARNING
+    metadata:
+      algorithm: RSA
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 15
+      mosca_y: 5
+      mosca_z: 7
+
+  # ── Vulnerable but NOT Critical (X+Y <= Z) ─────────────────────────────────
+  - id: weak-hash-sha1
+    patterns:
+      - pattern: hashlib.sha1(...)
+    message: >
+      SHA-1 is cryptographically weak. Migrate to SHA-256 or SHA-3.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      algorithm: SHA1
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 1
+      mosca_y: 1
+      mosca_z: 10
+
+  - id: insecure-rc4
+    patterns:
+      - pattern: ARC4.new(...)
+    message: >
+      RC4 is a broken stream cipher. Migrate to AES-256-GCM.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      algorithm: RC4
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 2
+      mosca_y: 2
+      mosca_z: 10
+
+  - id: insecure-3des
+    patterns:
+      - pattern: DES3.new(...)
+    message: >
+      3DES is slow and vulnerable to Sweet32. Migrate to AES-256-GCM.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      algorithm: 3DES
+      category: weak-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 3
+      mosca_y: 3
+      mosca_z: 10
+
+  - id: insecure-blowfish
+    patterns:
+      - pattern: Blowfish.new(...)
+    message: >
+      Blowfish has a 64-bit block size and is vulnerable to birthday attacks. Migrate to AES.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      algorithm: BLOWFISH
+      category: weak-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 2
+      mosca_y: 2
+      mosca_z: 10
+
+  # ── Not Vulnerable (Secure / PQC) (X+Y <= Z with large Z) ──────────────────
+  - id: secure-aes-gcm
+    patterns:
+      - pattern: AES.new(..., AES.MODE_GCM)
+    message: >
+      AES-GCM is a secure, authenticated symmetric cipher and is quantum-resistant with 256-bit keys.
+    languages: [python]
+    severity: INFO
+    metadata:
+      algorithm: AES-GCM
+      category: secure-cipher
+      cwe: N/A
+      owasp: N/A
+      mosca_x: 20
+      mosca_y: 1
+      mosca_z: 50
+
+  - id: secure-sha256
+    patterns:
+      - pattern: hashlib.sha256(...)
+    message: >
+      SHA-256 is a secure cryptographic hash function.
+    languages: [python]
+    severity: INFO
+    metadata:
+      algorithm: SHA256
+      category: secure-hash
+      cwe: N/A
+      owasp: N/A
+      mosca_x: 10
+      mosca_y: 1
+      mosca_z: 50
+
+  - id: pqc-kyber
+    patterns:
+      - pattern: pqcrypto.kem.kyber512.generate_keypair()
+    message: >
+      Kyber (ML-KEM) is a NIST FIPS 203 post-quantum standard.
+    languages: [python]
+    severity: INFO
+    metadata:
+      algorithm: ML-KEM
+      category: pqc-kem
+      cwe: N/A
+      owasp: N/A
+      mosca_x: 30
+      mosca_y: 0
+      mosca_z: 50
+
+  - id: pqc-dilithium
+    patterns:
+      - pattern: pqcrypto.sign.dilithium2.generate_keypair()
+    message: >
+      Dilithium (ML-DSA) is a NIST FIPS 204 post-quantum standard.
+    languages: [python]
+    severity: INFO
+    metadata:
+      algorithm: ML-DSA
+      category: pqc-signature
+      cwe: N/A
+      owasp: N/A
+      mosca_x: 30
+      mosca_y: 0
+      mosca_z: 50
