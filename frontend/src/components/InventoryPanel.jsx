@@ -193,26 +193,27 @@ export default function InventoryPanel({ components = [], onClose }) {
 
   return (
     <>
-      {/* Backdrop */}
+      {/* Backdrop — starts below the header */}
       <div
         onClick={onClose}
         style={{
-          position: 'fixed', inset: 0,
-          background: 'rgba(0,0,0,0.7)',
-          zIndex: 300,
+          position: 'fixed',
+          top: 44, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.65)',
+          zIndex: 98,
           animation: 'fadeInPanel 0.2s ease',
         }}
       />
 
-      {/* Panel — slides down from top */}
+      {/* Panel — slides down from below the sticky header */}
       <div
         style={{
           position: 'fixed',
-          top: 0, left: 0, right: 0,
-          height: '92vh',
+          top: 44, left: 0, right: 0,
+          bottom: 0,
           background: DS.bg,
           borderBottom: `2px solid ${DS.primary}50`,
-          zIndex: 301,
+          zIndex: 99,
           display: 'flex',
           flexDirection: 'column',
           animation: 'slideDownPanel 0.28s cubic-bezier(0.16,1,0.3,1)',

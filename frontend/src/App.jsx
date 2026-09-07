@@ -163,7 +163,12 @@ function SummaryCard({
 
 // ── CycloneDX JSON Drawer Overlay ─────────────────────────────────────────────
 function CycloneDXDrawer({ bom, onClose }) {
-  const json = useMemo(() => JSON.stringify(bom, null, 2), [bom])
+  const isOffline = bom?._offlineMode === true
+  const json = useMemo(() => {
+    // Strip internal _offlineMode flag from the exported JSON
+    const { _offlineMode, ...cleanBom } = bom || {}
+    return JSON.stringify(cleanBom, null, 2)
+  }, [bom])
 
   return (
     <>
@@ -216,6 +221,18 @@ function CycloneDXDrawer({ bom, onClose }) {
                 }}
               >
                 {bom.serialNumber}
+              </span>
+            )}
+            {isOffline && (
+              <span
+                style={{
+                  fontSize: 10, fontWeight: 700,
+                  padding: '2px 8px', borderRadius: 4,
+                  background: `${DS.tertiary}18`, color: DS.tertiary,
+                  border: `1px solid ${DS.tertiary}40`,
+                }}
+              >
+                Offline — Sample Data
               </span>
             )}
           </div>
@@ -397,7 +414,9 @@ export default function App() {
   // ── Export ─────────────────────────────────────────────────────────────────
   function exportJson() {
     if (!bom) return
-    const blob = new Blob([JSON.stringify(bom, null, 2)], { type: 'application/json' })
+    // Strip internal _offlineMode flag before exporting
+    const { _offlineMode, ...cleanBom } = bom
+    const blob = new Blob([JSON.stringify(cleanBom, null, 2)], { type: 'application/json' })
     const a = Object.assign(document.createElement('a'), {
       href: URL.createObjectURL(blob),
       download: 'cyclonedx-bom.json',
@@ -889,6 +908,30 @@ export default function App() {
               }}
             >
               {bom.serialNumber}
+            </span>
+          )}
+          {bom?._offlineMode && (
+            <span
+              style={{
+                fontSize: 10, fontWeight: 700,
+                padding: '2px 8px', borderRadius: 4,
+                background: `${DS.tertiary}18`, color: DS.tertiary,
+                border: `1px solid ${DS.tertiary}40`,
+              }}
+            >
+              Offline — Sample Data
+            </span>
+          )}
+          {bom && !bom._offlineMode && (
+            <span
+              style={{
+                fontSize: 10, fontWeight: 700,
+                padding: '2px 8px', borderRadius: 4,
+                background: `${DS.emerald}18`, color: DS.emerald,
+                border: `1px solid ${DS.emerald}40`,
+              }}
+            >
+              {bom.components?.length ?? 0} components
             </span>
           )}
         </div>

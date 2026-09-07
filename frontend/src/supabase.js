@@ -63,8 +63,10 @@ export const supabase = isConfigured
 export async function saveHistoryEntry(bom, target, userId) {
   if (!isConfigured || !userId || !bom) return { error: 'not configured' }
 
-  const components = bom?.components || []
-  const summary    = bom?.summary    || {}
+  // Strip any internal flags before persisting
+  const { _offlineMode, ...cleanBom } = bom
+  const components = cleanBom?.components || []
+  const summary    = cleanBom?.summary    || {}
   const total      = summary.total_findings  ?? components.length
   const critical   = summary.critical_count  ??
     components.filter(c => c.mosca?.risk_level === 'CRITICAL').length
@@ -76,7 +78,7 @@ export async function saveHistoryEntry(bom, target, userId) {
       target:   target || 'unknown',
       total,
       critical,
-      bom_json: bom,     // the full CycloneDX schema — no source files
+      bom_json: cleanBom,     // the full CycloneDX schema — no source files
     })
     .select()
     .single()

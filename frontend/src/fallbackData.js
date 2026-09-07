@@ -1,7 +1,17 @@
+// Offline fallback BOM used when the API is unreachable.
+// We generate a fresh UUID at module load so the serial number is always unique.
+function _uuid() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16)
+  })
+}
+
 export const FALLBACK_BOM = {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:offline-mock-data-1234",
+  "serialNumber": `urn:uuid:${_uuid()}`,
+  "_offlineMode": true,
   "version": 1,
   "metadata": {
     "timestamp": new Date().toISOString(),
