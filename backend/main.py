@@ -4,9 +4,13 @@ main.py  —  ECDAT FastAPI application entry point.
 Endpoints
 ---------
 POST /scan
-    Body : { "target_directory": "<path>" }
+    Body : { "target_directory": "<local-path-or-git-url>" }
     Returns a CycloneDX 1.6 BOM JSON with cryptographic findings,
     Mosca's Theorem risk scores, and PQC migration recommendations.
+
+    Accepts either:
+      • A local directory path  (e.g.  ./dummy_target)
+      • A remote Git URL        (e.g.  https://github.com/example/repo.git)
 
 GET /health
     Simple liveness probe.
@@ -15,7 +19,9 @@ GET /health
 from __future__ import annotations
 
 import logging
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, status
@@ -78,6 +84,51 @@ class HealthResponse(BaseModel):
     version: str
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _is_git_url(value: str) -> bool:
+    """Return True if *value* looks like a remote Git URL."""
+    lowered = value.lower()
+    return (
+        lowered.startswith("http://")
+        or lowered.startswith("https://")
+        or lowered.startswith("git@")
+        or lowered.startswith("git://")
+    )
+
+
+def _clone_repo(url: str, dest: Path) -> None:
+    """
+    Shallow-clone *url* into *dest* using the system ``git`` binary.
+
+    Raises
+    ------
+    HTTPException (400)
+        If the clone fails for any reason (invalid URL, private repo,
+        network error, git not installed, etc.).
+    """
+    logger.info("Cloning remote repository: %s → %s", url, dest)
+    result = subprocess.run(
+        ["git", "clone", "--depth=1", url, str(dest)],
+        capture_output=True,
+        text=True,
+        timeout=120,        # bail out after 2 minutes
+    )
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or result.stdout.strip() or "unknown git error"
+        logger.error("git clone failed (exit %d): %s", result.returncode, stderr)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Failed to clone repository '{url}'. "
+                f"git exited with code {result.returncode}: {stderr}"
+            ),
+        )
+
+    logger.info("Clone complete: %s", dest)
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get(
@@ -93,54 +144,91 @@ async def health() -> HealthResponse:
 @app.post(
     "/scan",
     tags=["scanner"],
-    summary="Run a cryptographic scan on a target directory",
+    summary="Run a cryptographic scan on a local directory or remote GitHub repo",
     response_description="CycloneDX 1.6 BOM with cryptographic findings",
 )
 async def scan(request: ScanRequest) -> dict:
     """
-    1. Resolve the *target_directory* relative to the backend root.
-    2. Execute ``semgrep`` via the async scanner (AST / crypto-primitive analysis).
-    3. Run the native Python SCA scanner against manifest files in the same directory.
-    4. Merge both result sets into a single CycloneDX 1.6 BOM and return it.
+    Accepts either:
+    - A **local path** (absolute or relative to the backend root), e.g. ``./dummy_target``
+    - A **remote Git URL**, e.g. ``https://github.com/example/repo.git``
+
+    When a URL is provided the repo is shallow-cloned into a temporary directory,
+    scanned, and the temp directory is deleted immediately afterwards.
+
+    Steps
+    -----
+    1. Detect whether the input is a Git URL or a local path.
+    2. If a Git URL → shallow-clone into a ``tempfile.TemporaryDirectory``.
+    3. Resolve the scan target (local path or cloned dir).
+    4. Run Semgrep (AST) and dependency (SCA) scanners against the target.
+    5. Merge results into a CycloneDX 1.6 BOM and return it.
+    6. Clean up any temporary directory (guaranteed via ``finally``).
     """
-    # Resolve the path relative to the backend directory
-    backend_root = Path(__file__).parent
-    target = (backend_root / request.target_directory).resolve()
+    tmp_dir_obj = None   # TemporaryDirectory handle — kept alive until finally
 
-    logger.info("Scan requested for: %s (resolved: %s)", request.target_directory, target)
+    try:
+        # ── Step 1: URL vs local path ─────────────────────────────────────────
+        if _is_git_url(request.target_directory):
+            # ── Step 2: Clone remote repo into a temp directory ───────────────
+            tmp_dir_obj = tempfile.TemporaryDirectory(prefix="ecdat_clone_")
+            clone_dest  = Path(tmp_dir_obj.name) / "repo"
+            _clone_repo(request.target_directory, clone_dest)
+            target = clone_dest
 
-    if not target.exists():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Target path does not exist: {target}",
+        else:
+            # ── Local path: resolve relative to backend root ──────────────────
+            backend_root = Path(__file__).parent
+            target       = (backend_root / request.target_directory).resolve()
+
+            logger.info(
+                "Local scan requested: %s  (resolved: %s)",
+                request.target_directory, target,
+            )
+
+            if not target.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Target path does not exist: {target}",
+                )
+
+        logger.info("Starting scan on: %s", target)
+
+        # ── Step 3 (AST): Run Semgrep ─────────────────────────────────────────
+        semgrep_result = await run_semgrep_scan(str(target))
+
+        if semgrep_result.get("error"):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=semgrep_result.get("message", "Scanner error"),
+            )
+
+        # ── Step 4 (SCA): Scan third-party dependency manifests ───────────────
+        dependency_findings = scan_dependencies(str(target))
+        logger.info(
+            "SCA complete — %d vulnerable dependency finding(s)",
+            len(dependency_findings),
         )
 
-    # ── Step 3 (AST): Run Semgrep ────────────────────────────────────────────
-    semgrep_result = await run_semgrep_scan(str(target))
+        # ── Step 5: Merge & translate to CycloneDX ────────────────────────────
+        bom = transform_semgrep_to_cyclonedx(semgrep_result, dependency_findings)
 
-    if semgrep_result.get("error"):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=semgrep_result.get("message", "Scanner error"),
+        logger.info(
+            "Scan complete — %d total component(s), %d CRITICAL",
+            len(bom["components"]),
+            bom["summary"]["critical_count"],
         )
 
-    # ── Step 4 (SCA): Scan third-party dependency manifests ──────────────────
-    dependency_findings = scan_dependencies(str(target))
-    logger.info(
-        "SCA complete — %d vulnerable dependency finding(s)",
-        len(dependency_findings),
-    )
+        return bom
 
-    # ── Merge & translate to CycloneDX ───────────────────────────────────────
-    bom = transform_semgrep_to_cyclonedx(semgrep_result, dependency_findings)
-
-    logger.info(
-        "Scan complete — %d total component(s), %d CRITICAL",
-        len(bom["components"]),
-        bom["summary"]["critical_count"],
-    )
-
-    return bom
+    finally:
+        # ── Step 6: Cleanup — always runs, even on exception ──────────────────
+        if tmp_dir_obj is not None:
+            try:
+                tmp_dir_obj.cleanup()
+                logger.info("Temporary clone directory cleaned up.")
+            except Exception as cleanup_err:
+                logger.warning("Failed to clean up temp dir: %s", cleanup_err)
 
 
 # ── Dev entry point ───────────────────────────────────────────────────────────
