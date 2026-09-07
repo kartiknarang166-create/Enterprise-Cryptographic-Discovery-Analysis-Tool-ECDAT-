@@ -65,8 +65,9 @@ function summarise(bom) {
 }
 
 function moscaDefaults(components) {
+  if (!components || components.length === 0) return { x: 0, y: 0, z: 0 }
   const first = components.find(c => c.mosca?.risk_level === 'CRITICAL') || components[0]
-  if (!first?.mosca) return { x: 20, y: 5, z: 10 }
+  if (!first?.mosca) return { x: 0, y: 0, z: 0 }
   return {
     x: first.mosca.x_years_data_sensitivity || 5,
     y: first.mosca.y_years_migration_time    || 3,

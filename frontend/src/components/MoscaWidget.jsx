@@ -84,6 +84,7 @@ export default function MoscaWidget({ initialX = 20, initialY = 5, initialZ = 10
   useEffect(() => { setZ(initialZ) }, [initialZ])
 
   const exposed = (x + y) > z
+  const noData = x === 0 && y === 0 && z === 0
 
   return (
     <div
@@ -112,7 +113,15 @@ export default function MoscaWidget({ initialX = 20, initialY = 5, initialZ = 10
         <Info size={13} color={DS.outlineVar} />
       </div>
 
-      {/* Formula — each variable color-coded to its bar below */}
+      {noData ? (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '30px 0', color: DS.outlineVar }}>
+          <Info size={28} strokeWidth={1.5} />
+          <span style={{ fontSize: 12, fontWeight: 600, color: DS.muted }}>No Quantum Risk Detected</span>
+          <span style={{ fontSize: 11, color: DS.outlineVar }}>(0 vulnerable assets found)</span>
+        </div>
+      ) : (
+        <>
+          {/* Formula — each variable color-coded to its bar below */}
       <div style={{ textAlign: 'center', padding: '4px 0' }}>
         <span style={{ fontSize: 22, fontWeight: 800, letterSpacing: '0.15em' }}>
           <span style={{ color: DS.xColor }}>X</span>
@@ -232,6 +241,8 @@ export default function MoscaWidget({ initialX = 20, initialY = 5, initialZ = 10
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   )
 }
