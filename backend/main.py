@@ -12,19 +12,29 @@ POST /scan
       • A local directory path  (e.g.  ./dummy_target)
       • A remote Git URL        (e.g.  https://github.com/example/repo.git)
 
+POST /scan/upload
+    Accepts a zip file (multipart/form-data) — the browser zips the user's
+    selected local folder client-side using JSZip, then uploads it here.
+    The zip is extracted to a temp directory and scanned with the same
+    Semgrep + SCA pipeline.  Only the resulting CycloneDX BOM is returned;
+    raw source files are never persisted.
+
 GET /health
     Simple liveness probe.
 """
 
 from __future__ import annotations
 
+import io
 import logging
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 
@@ -59,7 +69,7 @@ app = FastAPI(
 # ── CORS — allow the Vite dev server (and any origin during development) ──────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # tighten to ["http://localhost:5173"] in prod
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -183,7 +193,7 @@ async def scan(request: ScanRequest) -> dict:
             # ── Step 2: Clone remote repo into a temp directory ───────────────
             tmp_dir_obj = tempfile.TemporaryDirectory(prefix="ecdat_clone_")
             clone_dest  = Path(tmp_dir_obj.name) / "repo"
-            _clone_repo(request.target_directory, clone_dest)
+            await run_in_threadpool(_clone_repo, request.target_directory, clone_dest)
             target = clone_dest
 
         else:
@@ -214,7 +224,7 @@ async def scan(request: ScanRequest) -> dict:
             )
 
         # ── Step 4 (SCA): Scan third-party dependency manifests ───────────────
-        dependency_findings = scan_dependencies(str(target))
+        dependency_findings = await run_in_threadpool(scan_dependencies, str(target))
         logger.info(
             "SCA complete — %d vulnerable dependency finding(s)",
             len(dependency_findings),
@@ -239,6 +249,95 @@ async def scan(request: ScanRequest) -> dict:
                 logger.info("Temporary clone directory cleaned up.")
             except Exception as cleanup_err:
                 logger.warning("Failed to clean up temp dir: %s", cleanup_err)
+
+
+@app.post(
+    "/scan/upload",
+    tags=["scanner"],
+    summary="Run a cryptographic scan on a browser-uploaded zip of a local folder",
+    response_description="CycloneDX 1.6 BOM with cryptographic findings",
+)
+async def scan_upload(file: UploadFile = File(...)) -> dict:
+    """
+    Accepts a **zip file** posted as multipart/form-data.
+
+    The browser (LandingPage.jsx) zips the user-selected local folder using
+    JSZip, then POSTs it here.  We extract the zip into a temp directory and
+    run the same scan pipeline as POST /scan.
+
+    Source files are extracted only into a temporary directory for the duration
+    of the scan.  Nothing is stored after the request completes.
+
+    Limits
+    ------
+    - Maximum upload size: 200 MB (enforced by the frontend and server-side)
+    - File must be a valid zip archive
+    """
+    MAX_BYTES = 200 * 1024 * 1024  # 200 MB
+
+    # Read the upload into memory
+    raw = await file.read()
+
+    if len(raw) > MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Upload too large ({len(raw) // (1024*1024)} MB). Maximum is 200 MB.",
+        )
+
+    # Validate it's a zip
+    if not zipfile.is_zipfile(io.BytesIO(raw)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is not a valid zip archive.",
+        )
+
+    tmp_dir_obj = tempfile.TemporaryDirectory(prefix="ecdat_upload_")
+    try:
+        extract_dir = Path(tmp_dir_obj.name)
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            # Security: guard against path-traversal in zip entry names
+            for member in zf.infolist():
+                member_path = extract_dir / member.filename
+                if not str(member_path.resolve()).startswith(str(extract_dir.resolve())):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Zip contains unsafe path entries (path traversal detected).",
+                    )
+            await run_in_threadpool(zf.extractall, extract_dir)
+
+        logger.info(
+            "Upload extracted: %s (%d bytes, %d files)",
+            file.filename, len(raw), len(list(extract_dir.rglob("*"))),
+        )
+
+        # ── Run same pipeline as POST /scan ────────────────────────────────────
+        semgrep_result = await run_semgrep_scan(str(extract_dir))
+
+        if semgrep_result.get("error"):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=semgrep_result.get("message", "Scanner error"),
+            )
+
+        dependency_findings = await run_in_threadpool(scan_dependencies, str(extract_dir))
+        logger.info("SCA complete — %d finding(s)", len(dependency_findings))
+
+        bom = transform_semgrep_to_cyclonedx(semgrep_result, dependency_findings)
+
+        logger.info(
+            "Upload scan complete — %d component(s), %d CRITICAL",
+            len(bom["components"]),
+            bom["summary"]["critical_count"],
+        )
+
+        return bom
+
+    finally:
+        try:
+            tmp_dir_obj.cleanup()
+            logger.info("Upload temp directory cleaned up.")
+        except Exception as cleanup_err:
+            logger.warning("Failed to clean up upload temp dir: %s", cleanup_err)
 
 
 # ── Dev entry point ───────────────────────────────────────────────────────────

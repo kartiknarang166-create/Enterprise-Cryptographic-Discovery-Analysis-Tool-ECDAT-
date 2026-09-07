@@ -1,25 +1,31 @@
 /**
  * App.jsx — ECDAT v1.0-pqc
- * Orchestrates two views:
- *   1. Landing Page (LandingPage.jsx) — default
- *   2. Analytics Dashboard — shown after a successful scan
+ * Orchestrates all views:
+ *   1. AuthPage        — shown when not logged in
+ *   2. Landing Page    — scanner entry point
+ *   3. Analytics Dashboard — shown after a successful scan
  *
- * Key wiring:
- *  - Landing scan result → setBom → setView('dashboard')
- *  - "∧" footer button → toggles CycloneDX JSON overlay drawer
- *  - activeInventoryFilter lifted to App so AlgoChart mirrors InventoryTable filter
- *  - DESIGN.md tokens throughout
+ * Key additions:
+ *  - Supabase auth gating (entire app)
+ *  - InventoryPanel overlay (triggered by Inventory nav tab)
+ *  - HistoryPanel tab (replaces Policy + Compliance)
+ *  - Scan history saved to Supabase after every successful scan
+ *  - Signed-in user email shown in header avatar; Sign Out button
  */
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   Shield, Wifi, Bell, Download, X,
-  Database, AlertTriangle, CheckCircle, Zap, Home,
+  Database, AlertTriangle, CheckCircle, Zap, Home, LogOut,
 } from 'lucide-react'
 import LandingPage    from './components/LandingPage'
 import InventoryTable from './components/InventoryTable'
+import InventoryPanel from './components/InventoryPanel'
+import HistoryPanel   from './components/HistoryPanel'
 import AlgoChart      from './components/AlgoChart'
 import MoscaWidget    from './components/MoscaWidget'
+import AuthPage       from './components/AuthPage'
 import { FALLBACK_BOM } from './fallbackData'
+import { supabase, saveHistoryEntry } from './supabase'
 import './index.css'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -54,7 +60,6 @@ function summarise(bom) {
   const total      = summary.total_findings ?? components.length
   const critical   = summary.critical_count ??
     components.filter(c => c.mosca?.risk_level === 'CRITICAL').length
-  // PQC-ready: assets whose algo name contains a NIST PQC standard keyword
   const pqcReady   = components.filter(c => {
     const name = (c.name || c.algorithm || '').toLowerCase()
     return name.includes('ml-kem') || name.includes('ml-dsa') || name.includes('kyber') ||
@@ -84,7 +89,6 @@ function NavTab({ label, active, onClick }) {
         fontSize: 13,
         fontWeight: active ? 600 : 400,
         color: active ? DS.onSurface : DS.muted,
-        borderBottom: active ? `2px solid ${DS.primary}` : '2px solid transparent',
         paddingBottom: 10,
         paddingTop: 12,
         background: 'none',
@@ -255,6 +259,11 @@ function CycloneDXDrawer({ bom, onClose }) {
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
+  // ── Auth state ─────────────────────────────────────────────────────────────
+  const [session,     setSession]     = useState(undefined)  // undefined = checking, null = logged out, object = logged in
+  const [user,        setUser]        = useState(null)
+
+  // ── App view ────────────────────────────────────────────────────────────────
   const [view,        setView]        = useState('landing')   // 'landing' | 'dashboard'
   const [apiStatus,   setApiStatus]   = useState('checking')
   const [targetDir,   setTargetDir]   = useState(DEFAULT_DIR)
@@ -262,8 +271,30 @@ export default function App() {
   const [activeTab,   setActiveTab]   = useState('Dashboard')
   const [searchQuery, setSearchQuery] = useState('')
   const [bomDrawerOpen, setBomDrawerOpen] = useState(false)
-  // Lifted filter state — keeps AlgoChart in sync with InventoryTable
+  const [inventoryPanelOpen, setInventoryPanelOpen] = useState(false)
   const [inventoryFilter, setInventoryFilter] = useState('All')
+
+  // ── Auth: check session on mount, subscribe to changes ─────────────────────
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session)
+      setUser(data.session?.user ?? null)
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, sess) => {
+      setSession(sess)
+      setUser(sess?.user ?? null)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  async function handleSignOut() {
+    await supabase.auth.signOut()
+    setView('landing')
+    setBom(null)
+    setActiveTab('Dashboard')
+  }
 
   // ── Health polling ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -282,11 +313,24 @@ export default function App() {
   }, [])
 
   // ── Called by LandingPage on successful scan ───────────────────────────────
-  function handleScanComplete(result, dir) {
+  async function handleScanComplete(result, dir) {
     setBom(result)
     setTargetDir(dir || DEFAULT_DIR)
     setView('dashboard')
     setInventoryFilter('All')
+
+    // Persist to Supabase (summary + BOM only — no source files)
+    if (user?.id) {
+      await saveHistoryEntry(result, dir, user.id)
+    }
+  }
+
+  // ── History: load a past scan ──────────────────────────────────────────────
+  function handleLoadHistoryScan(historicBom, target) {
+    setBom(historicBom)
+    setTargetDir(target || DEFAULT_DIR)
+    setInventoryFilter('All')
+    setActiveTab('Dashboard')
   }
 
   // ── In-dashboard re-scan ───────────────────────────────────────────────────
@@ -305,7 +349,7 @@ export default function App() {
     return () => clearInterval(timerRef.current)
   }, [loading])
 
-  const SCAN_TIMEOUT_MS = 300_000  // 5 minutes — matches backend SCAN_TIMEOUT_SECONDS
+  const SCAN_TIMEOUT_MS = 300_000
 
   const runScan = useCallback(async () => {
     setLoading(true)
@@ -320,7 +364,6 @@ export default function App() {
         signal:  controller.signal,
       })
       if (!res.ok) {
-        // API returned an error (4xx / 5xx) — extract and surface the detail
         let detail = `Scan failed (HTTP ${res.status})`
         try {
           const b = await res.json()
@@ -329,13 +372,16 @@ export default function App() {
         setError(detail)
         return
       }
-      setBom(await res.json())
+      const result = await res.json()
+      setBom(result)
       setInventoryFilter('All')
+
+      // Persist to Supabase
+      if (user?.id) await saveHistoryEntry(result, targetDir.trim() || DEFAULT_DIR, user.id)
     } catch (err) {
       if (err.name === 'AbortError') {
-        setError(`Scan timed out after ${Math.round(SCAN_TIMEOUT_MS / 60000)} minutes. The repository may be too large. Try a smaller repo.`)
+        setError(`Scan timed out after ${Math.round(SCAN_TIMEOUT_MS / 60000)} minutes. Try a smaller repo.`)
       } else if (err instanceof TypeError) {
-        // Network-level failure (backend went offline mid-session) — use fallback
         console.warn('Backend unreachable, using fallback data:', err.message)
         setBom(FALLBACK_BOM)
         setInventoryFilter('All')
@@ -346,7 +392,7 @@ export default function App() {
       clearTimeout(timeoutId)
       setLoading(false)
     }
-  }, [targetDir])
+  }, [targetDir, user])
 
   // ── Export ─────────────────────────────────────────────────────────────────
   function exportJson() {
@@ -372,14 +418,42 @@ export default function App() {
     offline:  { color: DS.error,     label: 'API Offline'   },
   }[apiStatus]
 
+  // ── Auth: still checking ────────────────────────────────────────────────────
+  if (session === undefined) {
+    return (
+      <div style={{ minHeight: '100vh', background: DS.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <svg style={{ width: 32, height: 32, animation: 'spin-app 1s linear infinite' }} viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="10" stroke={`${DS.primary}30`} strokeWidth="2" />
+          <path d="M12 2a10 10 0 0 1 10 10" stroke={DS.primary} strokeWidth="2" strokeLinecap="round" />
+        </svg>
+        <style>{`@keyframes spin-app { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
+      </div>
+    )
+  }
+
+  // ── Auth: not logged in ─────────────────────────────────────────────────────
+  if (!session) {
+    return <AuthPage onAuth={(sess) => { setSession(sess); setUser(sess?.user ?? null) }} />
+  }
+
   // ── Landing view ───────────────────────────────────────────────────────────
   if (view === 'landing') {
     return <LandingPage onScanComplete={handleScanComplete} />
   }
 
   // ── Dashboard view ─────────────────────────────────────────────────────────
+  const NAV_TABS = ['Dashboard', 'Inventory', 'History']
+
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: DS.bg, fontFamily: 'Inter, sans-serif' }}>
+
+      {/* InventoryPanel overlay */}
+      {inventoryPanelOpen && (
+        <InventoryPanel
+          components={components}
+          onClose={() => setInventoryPanelOpen(false)}
+        />
+      )}
 
       {/* ════════════ TOP HEADER BAR ════════════ */}
       <header
@@ -491,8 +565,20 @@ export default function App() {
 
         {/* Nav tabs */}
         <nav style={{ display: 'flex', alignItems: 'stretch', gap: 24, flexShrink: 0 }}>
-          {['Dashboard', 'Inventory', 'Policy', 'Compliance'].map(tab => (
-            <NavTab key={tab} label={tab} active={activeTab === tab} onClick={() => setActiveTab(tab)} />
+          {NAV_TABS.map(tab => (
+            <NavTab
+              key={tab}
+              label={tab}
+              active={activeTab === tab && tab !== 'Inventory'}
+              onClick={() => {
+                if (tab === 'Inventory') {
+                  // Open as overlay panel instead of switching tab content
+                  setInventoryPanelOpen(true)
+                } else {
+                  setActiveTab(tab)
+                }
+              }}
+            />
           ))}
         </nav>
 
@@ -558,19 +644,38 @@ export default function App() {
             )}
           </div>
 
-          {/* Avatar */}
-          <div
-            style={{
-              width: 24, height: 24, borderRadius: '50%',
-              background: `${DS.primary}28`,
-              border: `1px solid ${DS.primary}50`,
-              color: DS.primary,
-              fontSize: 11, fontWeight: 700,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              flexShrink: 0,
-            }}
-          >
-            U
+          {/* User avatar + sign out */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div
+              title={user?.email || 'Signed in'}
+              style={{
+                width: 26, height: 26, borderRadius: '50%',
+                background: `${DS.primary}28`,
+                border: `1px solid ${DS.primary}50`,
+                color: DS.primary,
+                fontSize: 10, fontWeight: 700,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                flexShrink: 0, cursor: 'default',
+              }}
+            >
+              {(user?.email?.[0] || 'U').toUpperCase()}
+            </div>
+            <button
+              id="btn-sign-out"
+              onClick={handleSignOut}
+              title="Sign out"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 4,
+                background: 'none', border: 'none',
+                color: DS.muted, cursor: 'pointer',
+                fontSize: 11, fontWeight: 500,
+                transition: 'color 0.15s',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.color = DS.error)}
+              onMouseLeave={e => (e.currentTarget.style.color = DS.muted)}
+            >
+              <LogOut size={12} />
+            </button>
           </div>
         </div>
       </header>
@@ -599,123 +704,158 @@ export default function App() {
           </div>
         )}
 
-        {/* ── 4 Summary Cards ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, animation: 'fade-up 0.4s ease both' }}>
-          <SummaryCard
-            title="Total Cryptographic Assets"
-            subtitle="Scanned from AST & Manifests"
-            value={bom ? total : '—'}
-            valueColor={DS.onSurface}
-            icon={Database}
+        {/* ── History Tab ── */}
+        {activeTab === 'History' && (
+          <HistoryPanel
+            userId={user?.id}
+            onLoadScan={handleLoadHistoryScan}
           />
-          <SummaryCard
-            title="Quantum-Vulnerable Assets"
-            subtitle="Immediate migration recommended"
-            value={bom ? (critical > 0 ? `${critical} Quantum-Vulnerable` : '0 Vulnerable') : '—'}
-            valueColor={critical > 0 ? DS.error : DS.emerald}
-            icon={AlertTriangle}
-            leftAccent={DS.error}
-            tag={bom && critical > 0 ? 'RSA/ECC' : undefined}
-            tagBg={`${DS.error}1a`}
-            tagColor={DS.error}
-          />
-          <SummaryCard
-            title="PQC Migration Progress"
-            subtitle="(Target NIST FIPS 203/204)"
-            value={bom ? `${pqcPct}% PQC Migrated` : '—'}
-            valueColor={pqcPct >= 50 ? DS.emerald : DS.tertiary}
-            icon={CheckCircle}
-            leftAccent={pqcPct >= 50 ? DS.emerald : DS.tertiary}
-            tag={bom ? (pqcPct >= 50 ? 'On Track' : 'Needs Work') : undefined}
-            tagBg={pqcPct >= 50 ? `${DS.emerald}1a` : `${DS.tertiary}1a`}
-            tagColor={pqcPct >= 50 ? DS.emerald : DS.tertiary}
-          />
-          <SummaryCard
-            title="Cryptographic Risk Score"
-            subtitle="Assets requiring urgent PQC upgrade"
-            value={bom ? (critical > 0 ? `${critical} / ${total}` : '0 at Risk') : '—'}
-            valueColor={critical > 0 ? DS.error : DS.emerald}
-            icon={Zap}
-            leftAccent={critical > 0 ? DS.error : DS.emerald}
-            tag={bom ? (critical > 0 ? 'Action Required' : 'Secure') : undefined}
-            tagBg={critical > 0 ? `${DS.error}1a` : `${DS.emerald}1a`}
-            tagColor={critical > 0 ? DS.error : DS.emerald}
-          />
-        </div>
+        )}
 
-        {/* ── Stacked content ── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', animation: 'fade-up 0.5s ease 0.1s both' }}>
+        {/* ── Dashboard Tab ── */}
+        {activeTab === 'Dashboard' && (
+          <>
+            {/* 4 Summary Cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, animation: 'fade-up 0.4s ease both' }}>
+              <SummaryCard
+                title="Total Cryptographic Assets"
+                subtitle="Scanned from AST & Manifests"
+                value={bom ? total : '—'}
+                valueColor={DS.onSurface}
+                icon={Database}
+              />
+              <SummaryCard
+                title="Quantum-Vulnerable Assets"
+                subtitle="Immediate migration recommended"
+                value={bom ? (critical > 0 ? `${critical} Quantum-Vulnerable` : '0 Vulnerable') : '—'}
+                valueColor={critical > 0 ? DS.error : DS.emerald}
+                icon={AlertTriangle}
+                leftAccent={DS.error}
+                tag={bom && critical > 0 ? 'RSA/ECC' : undefined}
+                tagBg={`${DS.error}1a`}
+                tagColor={DS.error}
+              />
+              <SummaryCard
+                title="PQC Migration Progress"
+                subtitle="(Target NIST FIPS 203/204)"
+                value={bom ? `${pqcPct}% PQC Migrated` : '—'}
+                valueColor={pqcPct >= 50 ? DS.emerald : DS.tertiary}
+                icon={CheckCircle}
+                leftAccent={pqcPct >= 50 ? DS.emerald : DS.tertiary}
+                tag={bom ? (pqcPct >= 50 ? 'On Track' : 'Needs Work') : undefined}
+                tagBg={pqcPct >= 50 ? `${DS.emerald}1a` : `${DS.tertiary}1a`}
+                tagColor={pqcPct >= 50 ? DS.emerald : DS.tertiary}
+              />
+              <SummaryCard
+                title="Cryptographic Risk Score"
+                subtitle="Assets requiring urgent PQC upgrade"
+                value={bom ? (critical > 0 ? `${critical} / ${total}` : '0 at Risk') : '—'}
+                valueColor={critical > 0 ? DS.error : DS.emerald}
+                icon={Zap}
+                leftAccent={critical > 0 ? DS.error : DS.emerald}
+                tag={bom ? (critical > 0 ? 'Action Required' : 'Secure') : undefined}
+                tagBg={critical > 0 ? `${DS.error}1a` : `${DS.emerald}1a`}
+                tagColor={critical > 0 ? DS.error : DS.emerald}
+              />
+            </div>
 
-          {/* Cryptographic Inventory */}
-          <div
-            style={{
-              width: '100%', background: DS.surfaceLow,
-              border: `1px solid ${DS.outlineVar}`, borderRadius: 4,
-              padding: 14, display: 'flex', flexDirection: 'column', gap: 12,
-            }}
-          >
-            <h2 style={{ fontSize: 14, fontWeight: 600, color: DS.onSurface }}>
-              Cryptographic Inventory
-            </h2>
+            {/* Stacked content */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', animation: 'fade-up 0.5s ease 0.1s both' }}>
 
-            {/* Search */}
-            <input
-              type="text"
-              placeholder="Search assets..."
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              style={{
-                width: '100%', background: DS.surfaceHigh,
-                border: `1px solid ${DS.outlineVar}`, borderRadius: 4,
-                color: DS.onSurface, padding: '6px 12px',
-                fontSize: 13, outline: 'none', boxSizing: 'border-box',
-              }}
-            />
+              {/* Cryptographic Inventory */}
+              <div
+                style={{
+                  width: '100%', background: DS.surfaceLow,
+                  border: `1px solid ${DS.outlineVar}`, borderRadius: 4,
+                  padding: 14, display: 'flex', flexDirection: 'column', gap: 12,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <h2 style={{ fontSize: 14, fontWeight: 600, color: DS.onSurface }}>
+                    Cryptographic Inventory
+                  </h2>
+                  {bom && (
+                    <button
+                      onClick={() => setInventoryPanelOpen(true)}
+                      style={{
+                        fontSize: 12, fontWeight: 600,
+                        color: DS.primary, background: `${DS.primary}12`,
+                        border: `1px solid ${DS.primary}30`,
+                        borderRadius: 6, padding: '4px 12px',
+                        cursor: 'pointer', transition: 'all 0.15s',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background = `${DS.primary}22`; e.currentTarget.style.borderColor = `${DS.primary}60` }}
+                      onMouseLeave={e => { e.currentTarget.style.background = `${DS.primary}12`; e.currentTarget.style.borderColor = `${DS.primary}30` }}
+                    >
+                      View Full List ↗
+                    </button>
+                  )}
+                </div>
 
-            {!bom && (
-              <div style={{ padding: '20px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: DS.outline }}>
-                <Shield size={28} strokeWidth={1.2} />
-                <p style={{ fontSize: 12, textAlign: 'center' }}>Run a scan to see results</p>
-              </div>
-            )}
-
-            {loading && (
-              <div style={{ padding: '20px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: DS.primary }}>
-                <svg style={{ width: 18, height: 18, animation: 'spin-slow 1s linear infinite' }} viewBox="0 0 24 24" fill="none">
-                  <circle cx="12" cy="12" r="10" stroke={`${DS.primary}30`} strokeWidth="2" />
-                  <path d="M12 2a10 10 0 0 1 10 10" stroke={DS.primary} strokeWidth="2" strokeLinecap="round" />
-                </svg>
-                <span style={{ fontSize: 12 }}>Scanning…</span>
-              </div>
-            )}
-
-            {bom && !loading && (
-              <div style={{ width: '100%', overflowX: 'auto' }}>
-                <InventoryTable
-                  components={components}
-                  searchQuery={searchQuery}
-                  onFilterChange={setInventoryFilter}
+                {/* Search */}
+                <input
+                  type="text"
+                  placeholder="Search assets..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  style={{
+                    width: '100%', background: DS.surfaceHigh,
+                    border: `1px solid ${DS.outlineVar}`, borderRadius: 4,
+                    color: DS.onSurface, padding: '6px 12px',
+                    fontSize: 13, outline: 'none', boxSizing: 'border-box',
+                    fontFamily: 'Inter, sans-serif',
+                    transition: 'border-color 0.15s',
+                  }}
+                  onFocus={e => (e.target.style.borderColor = DS.primary)}
+                  onBlur={e  => (e.target.style.borderColor = DS.outlineVar)}
                 />
+
+                {!bom && (
+                  <div style={{ padding: '20px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: DS.outline }}>
+                    <Shield size={28} strokeWidth={1.2} />
+                    <p style={{ fontSize: 12, textAlign: 'center' }}>Run a scan to see results</p>
+                  </div>
+                )}
+
+                {loading && (
+                  <div style={{ padding: '20px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: DS.primary }}>
+                    <svg style={{ width: 18, height: 18, animation: 'spin-slow 1s linear infinite' }} viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" stroke={`${DS.primary}30`} strokeWidth="2" />
+                      <path d="M12 2a10 10 0 0 1 10 10" stroke={DS.primary} strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                    <span style={{ fontSize: 12 }}>Scanning…</span>
+                  </div>
+                )}
+
+                {bom && !loading && (
+                  <div style={{ width: '100%', overflowX: 'auto' }}>
+                    <InventoryTable
+                      components={components}
+                      searchQuery={searchQuery}
+                      onFilterChange={setInventoryFilter}
+                    />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          {/* Algorithm Breakdown — mirrors inventory filter */}
-          <div
-            style={{
-              width: '100%', background: DS.surfaceLow,
-              border: `1px solid ${DS.outlineVar}`, borderRadius: 4,
-              padding: 14,
-            }}
-          >
-            <AlgoChart components={components} filterMode={inventoryFilter} />
-          </div>
+              {/* Algorithm Breakdown */}
+              <div
+                style={{
+                  width: '100%', background: DS.surfaceLow,
+                  border: `1px solid ${DS.outlineVar}`, borderRadius: 4,
+                  padding: 14,
+                }}
+              >
+                <AlgoChart components={components} filterMode={inventoryFilter} />
+              </div>
 
-          {/* Mosca Widget */}
-          <div style={{ width: '100%' }}>
-            <MoscaWidget initialX={mosca.x} initialY={mosca.y} initialZ={mosca.z} />
-          </div>
-        </div>
+              {/* Mosca Widget */}
+              <div style={{ width: '100%' }}>
+                <MoscaWidget initialX={mosca.x} initialY={mosca.y} initialZ={mosca.z} />
+              </div>
+            </div>
+          </>
+        )}
       </main>
 
       {/* ════════════ STICKY FOOTER — CycloneDX Output Bar ════════════ */}
