@@ -74,9 +74,11 @@ class ScanRequest(BaseModel):
     @field_validator("target_directory")
     @classmethod
     def must_not_be_empty(cls, v: str) -> str:
-        if not v.strip():
+        # Strip spaces and surrounding quotes that might accidentally be included
+        v = v.strip(' "\'')
+        if not v:
             raise ValueError("target_directory must not be empty")
-        return v.strip()
+        return v
 
 
 class HealthResponse(BaseModel):
@@ -108,22 +110,30 @@ def _clone_repo(url: str, dest: Path) -> None:
         network error, git not installed, etc.).
     """
     logger.info("Cloning remote repository: %s → %s", url, dest)
-    result = subprocess.run(
-        ["git", "clone", "--depth=1", url, str(dest)],
-        capture_output=True,
-        text=True,
-        timeout=120,        # bail out after 2 minutes
-    )
-
-    if result.returncode != 0:
-        stderr = result.stderr.strip() or result.stdout.strip() or "unknown git error"
-        logger.error("git clone failed (exit %d): %s", result.returncode, stderr)
+    try:
+        subprocess.run(
+            ["git", "clone", "--depth=1", url, str(dest)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=True,      # raises CalledProcessError on non-zero exit
+        )
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "").strip() or (e.stdout or "").strip() or "unknown git error"
+        logger.error("git clone failed (exit %d): %s", e.returncode, stderr)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Failed to clone repository '{url}'. "
-                f"git exited with code {result.returncode}: {stderr}"
-            ),
+            detail=f"git clone failed for '{url}': {stderr}",
+        ) from e
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="git is not installed or not on PATH. Cannot clone remote repositories.",
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"git clone timed out after 120s for '{url}'.",
         )
 
     logger.info("Clone complete: %s", dest)

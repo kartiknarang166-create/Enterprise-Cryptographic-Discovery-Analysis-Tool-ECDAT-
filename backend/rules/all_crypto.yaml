@@ -1,0 +1,71 @@
+rules:
+  # ── Python ────────────────────────────────────────────────────────────────────
+  - id: py-crypto
+    languages: [python]
+    severity: WARNING
+    message: "Python cryptography used."
+    pattern-either:
+      - pattern: hashlib.$FUNC(...)
+      - pattern-regex: "import (hashlib|cryptography)"
+    metadata:
+      algorithm: LEGACY-PYTHON-CRYPTO
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 5
+      mosca_z: 5
+
+  # ── JavaScript / TypeScript ───────────────────────────────────────────────────
+  - id: js-crypto
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "JS cryptography used."
+    pattern-either:
+      - pattern: $X.createHash(...)
+      - pattern: $X.createCipher(...)
+      - pattern-regex: "require\\('(crypto|bcrypt|crypto-js)'\\)"
+    metadata:
+      algorithm: LEGACY-JS-CRYPTO
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 5
+      mosca_z: 5
+
+  # ── Java ──────────────────────────────────────────────────────────────────────
+  - id: java-crypto
+    languages: [java]
+    severity: WARNING
+    message: "Java cryptography used."
+    pattern-either:
+      - pattern: MessageDigest.getInstance(...)
+      - pattern: Cipher.getInstance(...)
+      - pattern-regex: "import javax\\.crypto\\..*"
+    metadata:
+      algorithm: LEGACY-JAVA-CRYPTO
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 5
+      mosca_z: 5
+
+  # ── C / C++ ───────────────────────────────────────────────────────────────────
+  - id: c-cpp-crypto
+    languages: [c, cpp]
+    severity: WARNING
+    message: "C/C++ cryptography used."
+    pattern-either:
+      - pattern: MD5_Init(...)
+      - pattern: SHA1_Init(...)
+      - pattern-regex: "#include <openssl/.*>"
+    metadata:
+      algorithm: LEGACY-C-CRYPTO
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 5
+      mosca_z: 5
