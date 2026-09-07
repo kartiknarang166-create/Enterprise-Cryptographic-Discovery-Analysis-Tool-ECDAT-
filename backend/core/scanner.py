@@ -1,6 +1,19 @@
 """
 core/scanner.py
-Async wrapper around the Semgrep CLI. Executes a scan and returns parsed JSON.
+Async wrapper around the Semgrep CLI. Executes a multi-language scan and returns parsed JSON.
+
+Language coverage
+-----------------
+Semgrep is pointed at the ``rules/`` directory which contains one YAML file
+per language family:
+
+  rules/semgrep_crypto.yaml     — Python
+  rules/c_cpp_crypto.yaml       — C / C++
+  rules/java_crypto.yaml        — Java
+  rules/javascript_crypto.yaml  — JavaScript / TypeScript
+
+All files are loaded simultaneously with ``--config ./rules`` so a single
+subprocess call covers every language in the target repository.
 
 Windows compatibility
 ---------------------
@@ -26,8 +39,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Absolute path to the rules file (resolved relative to this file's location)
-_RULES_FILE = (Path(__file__).parent.parent / "rules" / "semgrep_crypto.yaml").resolve()
+# Absolute path to the rules DIRECTORY — Semgrep loads ALL *.yaml files within
+# it simultaneously, giving us multi-language coverage in a single subprocess call.
+_RULES_DIR = (Path(__file__).parent.parent / "rules").resolve()
 
 SCAN_TIMEOUT_SECONDS = 120
 
@@ -168,13 +182,21 @@ async def run_semgrep_scan(target_path: str) -> dict:
         logger.error("Scan target does not exist: %s", target)
         return _error_payload(f"Target path does not exist: {target}")
 
+    if not _RULES_DIR.is_dir():
+        logger.error("Rules directory does not exist: %s", _RULES_DIR)
+        return _error_payload(
+            f"Rules directory not found: {_RULES_DIR}. "
+            "Ensure the rules/ directory exists alongside main.py."
+        )
+
     semgrep_prefix, use_shell = _find_semgrep()
 
     cmd = [
         *semgrep_prefix,
-        "--config", str(_RULES_FILE),
+        "scan",
+        "--config", str(_RULES_DIR),   # directory → all *.yaml loaded at once
         "--json",
-        "--no-git-ignore",       # scan regardless of .gitignore
+        "--no-git-ignore",              # scan regardless of .gitignore
         str(target),
     ]
 
@@ -186,7 +208,7 @@ async def run_semgrep_scan(target_path: str) -> dict:
     else:
         run_arg = cmd
 
-    logger.info("Launching semgrep (shell=%s): %s", use_shell, run_arg)
+    logger.info("Launching semgrep multi-language scan (shell=%s): %s", use_shell, run_arg)
 
     try:
         loop = asyncio.get_event_loop()

@@ -1,0 +1,248 @@
+rules:
+  # ── JavaScript/TypeScript: crypto.createHash('md5') ──────────────────────────
+  - id: js-weak-hash-md5
+    patterns:
+      - pattern: crypto.createHash('md5')
+    message: >
+      crypto.createHash('md5') detected (Node.js). MD5 is cryptographically broken
+      and susceptible to collision attacks. Migrate to SHA-256 or SHA-3.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: MD5
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 3
+      mosca_y: 5
+      mosca_z: 5
+
+  - id: js-weak-hash-md5-double-quote
+    patterns:
+      - pattern: crypto.createHash("md5")
+    message: >
+      crypto.createHash("md5") detected (Node.js). MD5 is cryptographically broken.
+      Migrate to SHA-256 or SHA-3.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: MD5
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 3
+      mosca_y: 5
+      mosca_z: 5
+
+  # ── JavaScript/TypeScript: crypto.createHash('sha1') ─────────────────────────
+  - id: js-weak-hash-sha1
+    patterns:
+      - pattern: crypto.createHash('sha1')
+    message: >
+      crypto.createHash('sha1') detected (Node.js). SHA-1 is cryptographically weak.
+      Migrate to SHA-256 or SHA-3.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: SHA1
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 1
+      mosca_y: 1
+      mosca_z: 10
+
+  - id: js-weak-hash-sha1-double-quote
+    patterns:
+      - pattern: crypto.createHash("sha1")
+    message: >
+      crypto.createHash("sha1") detected (Node.js). SHA-1 is cryptographically weak.
+      Migrate to SHA-256 or SHA-3.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: SHA1
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 1
+      mosca_y: 1
+      mosca_z: 10
+
+  # ── JavaScript/TypeScript: crypto.createCipheriv with DES ────────────────────
+  - id: js-insecure-des
+    patterns:
+      - pattern: crypto.createCipheriv('des-ecb', ...)
+    message: >
+      DES cipher detected (Node.js crypto). DES uses a 56-bit key and has been
+      broken since 1997. Replace with AES-256-GCM.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: DES
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 6
+      mosca_z: 5
+
+  - id: js-insecure-des-cbc
+    patterns:
+      - pattern: crypto.createCipheriv('des-cbc', ...)
+    message: >
+      DES-CBC cipher detected (Node.js crypto). DES is cryptographically broken.
+      Replace with AES-256-GCM.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: DES
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 6
+      mosca_z: 5
+
+  # ── JavaScript/TypeScript: crypto.createCipheriv with RC4 ────────────────────
+  - id: js-insecure-rc4
+    patterns:
+      - pattern: crypto.createCipheriv('rc4', ...)
+    message: >
+      RC4 stream cipher detected (Node.js crypto). RC4 is cryptographically broken.
+      Migrate to AES-256-GCM or ChaCha20-Poly1305.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: RC4
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 2
+      mosca_y: 2
+      mosca_z: 10
+
+  # ── JavaScript/TypeScript: RSA via node-forge / node-rsa (quantum-vulnerable) ─
+  - id: js-rsa-quantum-vulnerable
+    patterns:
+      - pattern: forge.pki.rsa.generateKeyPair(...)
+    message: >
+      RSA key pair generation detected (node-forge). RSA is quantum-vulnerable
+      (Shor's algorithm). Migrate to ML-KEM (NIST FIPS 203).
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      algorithm: RSA
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 15
+      mosca_y: 5
+      mosca_z: 7
+
+  # ── JavaScript/TypeScript: SubtleCrypto RSA-OAEP (quantum-vulnerable) ─────────
+  - id: js-subtle-rsa-oaep
+    patterns:
+      - pattern: crypto.subtle.generateKey({name:"RSA-OAEP", ...}, ...)
+    message: >
+      RSA-OAEP key generation via SubtleCrypto detected. RSA is quantum-vulnerable
+      (Shor's algorithm). Migrate to ML-KEM (NIST FIPS 203).
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      algorithm: RSA
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 15
+      mosca_y: 5
+      mosca_z: 7
+
+  # ── JavaScript/TypeScript: SubtleCrypto ECDSA/ECDH (quantum-vulnerable) ───────
+  - id: js-subtle-ecdsa-quantum-vulnerable
+    patterns:
+      - pattern: crypto.subtle.generateKey({name:"ECDSA", ...}, ...)
+    message: >
+      ECDSA key generation via SubtleCrypto detected. ECDSA is quantum-vulnerable
+      (Shor's algorithm). Migrate to ML-DSA (NIST FIPS 204).
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      algorithm: ECDSA
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 5
+      mosca_z: 7
+
+  - id: js-subtle-ecdh-quantum-vulnerable
+    patterns:
+      - pattern: crypto.subtle.generateKey({name:"ECDH", ...}, ...)
+    message: >
+      ECDH key generation via SubtleCrypto detected. ECDH is quantum-vulnerable
+      (Shor's algorithm). Migrate to ML-KEM (NIST FIPS 203).
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      algorithm: ECDSA
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 5
+      mosca_z: 7
+
+  # ── JavaScript/TypeScript: CryptoJS MD5 ──────────────────────────────────────
+  - id: js-cryptojs-md5
+    patterns:
+      - pattern: CryptoJS.MD5(...)
+    message: >
+      CryptoJS.MD5 detected. MD5 is cryptographically broken.
+      Migrate to SHA-256 or SHA-3.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: MD5
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 3
+      mosca_y: 5
+      mosca_z: 5
+
+  # ── JavaScript/TypeScript: CryptoJS SHA1 ─────────────────────────────────────
+  - id: js-cryptojs-sha1
+    patterns:
+      - pattern: CryptoJS.SHA1(...)
+    message: >
+      CryptoJS.SHA1 detected. SHA-1 is cryptographically weak.
+      Migrate to SHA-256 or SHA-3.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: SHA1
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 1
+      mosca_y: 1
+      mosca_z: 10
+
+  # ── JavaScript/TypeScript: CryptoJS DES ──────────────────────────────────────
+  - id: js-cryptojs-des
+    patterns:
+      - pattern: CryptoJS.DES.encrypt(...)
+    message: >
+      CryptoJS.DES.encrypt detected. DES is cryptographically broken.
+      Migrate to AES-256-GCM.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: DES
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 6
+      mosca_z: 5
