@@ -145,43 +145,92 @@ export default function MoscaWidget({ initialX = 20, initialY = 5, initialZ = 10
         />
       </div>
 
-      {/* Verdict card — solid error-container bg (#93000a), centered text only */}
+      {/* Verdict banner — bold warning strip */}
       <div
         style={{
-          borderRadius: 4,
-          padding: '10px 12px',
-          textAlign: 'center',
-          background: exposed ? DS.errorCont : `${DS.emerald}18`,
-          border: exposed
-            ? 'none'
-            : `1px solid ${DS.emerald}40`,
+          borderRadius: 6,
+          border: `1.5px solid ${exposed ? '#ff6b6b' : DS.emerald + '70'}`,
+          background: exposed
+            ? 'linear-gradient(135deg, rgba(180,30,30,0.55) 0%, rgba(120,10,10,0.45) 100%)'
+            : 'linear-gradient(135deg, rgba(110,231,183,0.15) 0%, rgba(52,211,153,0.08) 100%)',
+          padding: '14px 16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
         }}
       >
-        <p
+        {/* Top row: label + badge */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {/* Pulsing dot */}
+            <div
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                background: exposed ? '#ff6b6b' : DS.emerald,
+                boxShadow: exposed ? '0 0 0 3px rgba(255,107,107,0.25)' : `0 0 0 3px ${DS.emerald}30`,
+                animation: exposed ? 'pulse-dot 1.4s ease-in-out infinite' : 'none',
+              }}
+            />
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 800,
+                letterSpacing: '0.12em',
+                textTransform: 'uppercase',
+                color: exposed ? '#ffcdd2' : DS.emerald,
+              }}
+            >
+              {exposed ? '⚠ Mosca Verdict' : '✓ Mosca Verdict'}
+            </span>
+          </div>
+          {/* X+Y > Z badge */}
+          <span
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 10,
+              fontWeight: 700,
+              padding: '2px 8px',
+              borderRadius: 4,
+              background: exposed ? 'rgba(255,107,107,0.18)' : 'rgba(110,231,183,0.15)',
+              border: `1px solid ${exposed ? 'rgba(255,107,107,0.45)' : DS.emerald + '50'}`,
+              color: exposed ? '#ffcdd2' : DS.emerald,
+            }}
+          >
+            {x}+{y} &gt; {z} = {exposed ? 'FAIL' : 'PASS'}
+          </span>
+        </div>
+
+        {/* Main verdict text */}
+        <div
           style={{
-            fontSize: 10,
-            fontWeight: 700,
-            letterSpacing: '0.05em',
-            textTransform: 'uppercase',
-            color: DS.outlineVar,
-            marginBottom: 4,
-          }}
-        >
-          Verdict
-        </p>
-        <p
-          style={{
-            fontSize: 11,
+            fontSize: 12,
             fontWeight: 800,
-            letterSpacing: '0.05em',
+            letterSpacing: '0.06em',
             textTransform: 'uppercase',
-            color: exposed ? DS.error : DS.emerald,
+            color: exposed ? '#ffffff' : DS.emerald,
+            lineHeight: 1.35,
+            textShadow: exposed ? '0 1px 8px rgba(0,0,0,0.6)' : 'none',
           }}
         >
           {exposed
-            ? 'EXPOSED TO HARVEST-NOW-DECRYPT-LATER'
-            : 'LOW QUANTUM EXPOSURE RISK'}
-        </p>
+            ? 'Exposed to Harvest-Now-Decrypt-Later'
+            : 'Low Quantum Exposure Risk'}
+        </div>
+
+        {/* Sub-note */}
+        {exposed && (
+          <div
+            style={{
+              fontSize: 10,
+              color: 'rgba(255,205,210,0.75)',
+              lineHeight: 1.4,
+            }}
+          >
+            Current crypto assets are vulnerable before CRQC arrival. Migrate to NIST PQC standards immediately.
+          </div>
+        )}
       </div>
     </div>
   )

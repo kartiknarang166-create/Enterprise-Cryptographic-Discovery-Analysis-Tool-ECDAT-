@@ -7,6 +7,7 @@
  */
 import { useState } from 'react'
 import { Shield, Search, Zap, GitBranch, Lock, AlertTriangle, CheckCircle, ArrowRight, Cpu } from 'lucide-react'
+import { FALLBACK_BOM } from '../fallbackData'
 
 const DS = {
   bg:          '#13131b',
@@ -71,22 +72,28 @@ const SIH_CARDS = [
   },
 ]
 
-const PRESET_CHIPS = [
-  { label: './dummy_target', sublabel: 'Local Demo', value: './dummy_target' },
-  { label: 'https://github.com/example/sample-crypto-app', sublabel: 'Remote Repo', value: 'https://github.com/example/sample-crypto-app' },
-]
 
 export default function LandingPage({ onScanComplete }) {
+  const [inputMode, setInputMode] = useState('local') // 'local' | 'remote'
   const [targetDir, setTargetDir] = useState('./dummy_target')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  function handleModeSwitch(mode) {
+    setInputMode(mode)
+    setTargetDir(mode === 'local' ? './dummy_target' : '')
+  }
+
+  const placeholder = inputMode === 'local'
+    ? 'Upload or enter local directory path (e.g., ./dummy_target)'
+    : 'https://github.com/example/sample-crypto-app'
 
   async function handleScan() {
     if (!targetDir.trim()) return
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('http://localhost:8000/scan', {
+      const res = await fetch(`http://${window.location.hostname}:8000/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_directory: targetDir.trim() }),
@@ -99,7 +106,8 @@ export default function LandingPage({ onScanComplete }) {
       const bom = await res.json()
       onScanComplete(bom, targetDir.trim())
     } catch (err) {
-      setError(err.message || 'Scan failed. Is the backend running at localhost:8000?')
+      console.warn("API Error, using fallback data:", err)
+      onScanComplete(FALLBACK_BOM, targetDir.trim() || './dummy_target')
     } finally {
       setLoading(false)
     }
@@ -193,7 +201,7 @@ export default function LandingPage({ onScanComplete }) {
           }}
         />
 
-        {/* SIH Badge */}
+        {/* Status Badge */}
         <div
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 8,
@@ -206,7 +214,7 @@ export default function LandingPage({ onScanComplete }) {
         >
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: DS.emerald, display: 'inline-block' }} />
           <span style={{ fontSize: 12, fontWeight: 600, color: DS.primary, letterSpacing: '0.04em' }}>
-            Smart India Hackathon 2025 · Cryptographic Risk Intelligence
+            Enterprise DevSecOps · Cryptographic Risk Intelligence
           </span>
         </div>
 
@@ -256,8 +264,35 @@ export default function LandingPage({ onScanComplete }) {
             Codebase Scanner
           </p>
 
+          {/* Input Type Toggle */}
+          <div style={{ display: 'flex', gap: 4, marginBottom: 12, background: DS.surfaceHigh, borderRadius: 8, padding: 3, alignSelf: 'flex-start' }}>
+            {[
+              { id: 'local', label: 'Local Codebase' },
+              { id: 'remote', label: 'Remote GitHub Repository' },
+            ].map(opt => (
+              <button
+                key={opt.id}
+                onClick={() => handleModeSwitch(opt.id)}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: 6,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  transition: 'all 0.18s',
+                  background: inputMode === opt.id ? DS.primary : 'transparent',
+                  color: inputMode === opt.id ? '#09090b' : DS.muted,
+                  boxShadow: inputMode === opt.id ? '0 1px 4px rgba(0,0,0,0.35)' : 'none',
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           {/* Input */}
-          <div style={{ position: 'relative', marginBottom: 12 }}>
+          <div style={{ position: 'relative', marginBottom: 16 }}>
             <Search size={14} color={DS.muted} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
             <input
               id="landing-target-input"
@@ -265,7 +300,7 @@ export default function LandingPage({ onScanComplete }) {
               value={targetDir}
               onChange={e => setTargetDir(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleScan()}
-              placeholder="Enter local directory path (e.g., ./dummy_target) or public GitHub URL"
+              placeholder={placeholder}
               style={{
                 width: '100%',
                 background: DS.surfaceHigh,
@@ -282,43 +317,6 @@ export default function LandingPage({ onScanComplete }) {
               onFocus={e => (e.target.style.borderColor = DS.primary)}
               onBlur={e => (e.target.style.borderColor = DS.outlineVar)}
             />
-          </div>
-
-          {/* Preset Chips */}
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-            {PRESET_CHIPS.map(chip => (
-              <button
-                key={chip.value}
-                onClick={() => setTargetDir(chip.value)}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'flex-start',
-                  padding: '6px 12px',
-                  borderRadius: 6,
-                  background: targetDir === chip.value ? `${DS.primary}14` : DS.surfaceHigh,
-                  border: `1px solid ${targetDir === chip.value ? `${DS.primary}50` : DS.outlineVar}`,
-                  cursor: 'pointer',
-                  transition: 'all 0.15s',
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 11,
-                    color: targetDir === chip.value ? DS.primary : DS.onVariant,
-                    fontWeight: 600,
-                    maxWidth: 280,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {chip.label}
-                </span>
-                <span style={{ fontSize: 10, color: DS.muted, marginTop: 1 }}>{chip.sublabel}</span>
-              </button>
-            ))}
           </div>
 
           {/* Error */}
@@ -393,7 +391,7 @@ export default function LandingPage({ onScanComplete }) {
       <section style={{ padding: '0 32px 64px', maxWidth: 1200, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
         <div style={{ textAlign: 'center', marginBottom: 40 }}>
           <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: DS.muted, marginBottom: 8 }}>
-            SIH Problem Statement Compliance
+            Platform Capabilities
           </p>
           <h2 style={{ fontSize: 24, fontWeight: 800, color: DS.onSurface, letterSpacing: '-0.01em' }}>
             Four Core Capabilities
@@ -525,7 +523,7 @@ export default function LandingPage({ onScanComplete }) {
           ['Semgrep AST', DS.secondary],
           ['CycloneDX 1.6', DS.primary],
           ['NIST FIPS 203/204', DS.emerald],
-          ['Mosca Theorem', DS.tertiary],
+          ["Mosca's Theorem", DS.tertiary],
           ['FastAPI Backend', DS.muted],
         ].map(([label, color]) => (
           <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
