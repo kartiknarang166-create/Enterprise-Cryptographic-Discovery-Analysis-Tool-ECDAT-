@@ -303,16 +303,26 @@ export default function App() {
         body:    JSON.stringify({ target_directory: targetDir.trim() || DEFAULT_DIR }),
       })
       if (!res.ok) {
-        let detail = `HTTP ${res.status} ${res.statusText}`
-        try { const b = await res.json(); detail = b.detail || b.message || detail } catch { /* ignore */ }
-        throw new Error(detail)
+        // API returned an error (4xx / 5xx) — extract and surface the detail
+        let detail = `Scan failed (HTTP ${res.status})`
+        try {
+          const b = await res.json()
+          detail = b.detail || b.message || detail
+        } catch { /* body not JSON */ }
+        setError(detail)
+        return
       }
       setBom(await res.json())
       setInventoryFilter('All')
     } catch (err) {
-      console.warn("API Error, using fallback data:", err)
-      setBom(FALLBACK_BOM)
-      setInventoryFilter('All')
+      if (err instanceof TypeError) {
+        // Network-level failure (backend went offline mid-session) — use fallback
+        console.warn('Backend unreachable, using fallback data:', err.message)
+        setBom(FALLBACK_BOM)
+        setInventoryFilter('All')
+      } else {
+        setError(err.message || 'An unexpected error occurred.')
+      }
     } finally {
       setLoading(false)
     }

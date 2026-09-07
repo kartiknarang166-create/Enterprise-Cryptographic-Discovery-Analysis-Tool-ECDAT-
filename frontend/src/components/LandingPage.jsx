@@ -99,15 +99,26 @@ export default function LandingPage({ onScanComplete }) {
         body: JSON.stringify({ target_directory: targetDir.trim() }),
       })
       if (!res.ok) {
-        let detail = `HTTP ${res.status} ${res.statusText}`
-        try { const b = await res.json(); detail = b.detail || b.message || detail } catch { /* ignore */ }
-        throw new Error(detail)
+        // API returned an error (4xx / 5xx) — extract and surface the detail
+        let detail = `Scan failed (HTTP ${res.status})`
+        try {
+          const b = await res.json()
+          detail = b.detail || b.message || detail
+        } catch { /* body not JSON */ }
+        setError(detail)
+        return
       }
       const bom = await res.json()
       onScanComplete(bom, targetDir.trim())
     } catch (err) {
-      console.warn("API Error, using fallback data:", err)
-      onScanComplete(FALLBACK_BOM, targetDir.trim() || './dummy_target')
+      if (err instanceof TypeError) {
+        // Network-level failure (backend is offline) — silently use fallback
+        console.warn('Backend unreachable, using fallback data:', err.message)
+        onScanComplete(FALLBACK_BOM, targetDir.trim() || './dummy_target')
+      } else {
+        // Any other JS error — show it
+        setError(err.message || 'An unexpected error occurred.')
+      }
     } finally {
       setLoading(false)
     }
