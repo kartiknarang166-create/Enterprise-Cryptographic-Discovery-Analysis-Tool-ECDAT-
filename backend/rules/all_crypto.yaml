@@ -1,11 +1,14 @@
 rules:
-  # ── Rule 1: MD5 hash usage via hashlib ────────────────────────────────────
+  # ── Python ──────────────────────────────────────────────────────────────────
   - id: weak-hash-md5
-    patterns:
+    pattern-either:
       - pattern: hashlib.md5(...)
+      - pattern: hashlib.new("md5", ...)
+      - pattern: hashlib.new("MD5", ...)
     message: >
       Use of MD5 detected. MD5 is cryptographically broken and susceptible to
-      collision attacks. Migrate to SHA-256 or SHA-3.
+      collision attacks (SHAttered, chosen-prefix collisions). Migrate to
+      SHA-256 or SHA-3.
     languages: [python]
     severity: ERROR
     metadata:
@@ -17,7 +20,6 @@ rules:
       mosca_y: 5
       mosca_z: 5
 
-  # ── Rule 2: RSA key generation with key size < 2048 bits ─────────────────
   - id: weak-rsa-key-size
     patterns:
       - pattern: RSA.generate($SIZE)
@@ -39,7 +41,6 @@ rules:
       mosca_y: 7
       mosca_z: 5
 
-  # ── Rule 3: DES cipher usage (Crypto.Cipher.DES) ─────────────────────────
   - id: insecure-des-cipher
     patterns:
       - pattern: DES.new(...)
@@ -57,7 +58,6 @@ rules:
       mosca_y: 6
       mosca_z: 5
 
-  # ── Critical (Quantum Vulnerable) ──────────────────────────────────────────
   - id: ecdsa-usage
     patterns:
       - pattern: ecdsa.SigningKey.generate(...)
@@ -125,12 +125,14 @@ rules:
       mosca_y: 5
       mosca_z: 7
 
-  # ── Vulnerable but NOT Critical (X+Y <= Z) ─────────────────────────────────
   - id: weak-hash-sha1
-    patterns:
+    pattern-either:
       - pattern: hashlib.sha1(...)
+      - pattern: hashlib.new("sha1", ...)
+      - pattern: hashlib.new("SHA1", ...)
     message: >
-      SHA-1 is cryptographically weak. Migrate to SHA-256 or SHA-3.
+      SHA-1 is cryptographically weak. It is susceptible to collision attacks
+      (SHAttered, ca. 2^63). Migrate to SHA-256 or SHA-3.
     languages: [python]
     severity: ERROR
     metadata:
@@ -190,7 +192,40 @@ rules:
       mosca_y: 2
       mosca_z: 10
 
-  # ── Not Vulnerable (Secure / PQC) (X+Y <= Z with large Z) ──────────────────
+  - id: python-ecb-mode
+    pattern-either:
+      - pattern: AES.new(..., AES.MODE_ECB)
+      - pattern: AES.new(..., mode=AES.MODE_ECB)
+    message: >
+      AES ECB mode detected. Identical plaintext blocks produce identical
+      ciphertext, leaking data patterns. Use AES-GCM or ChaCha20-Poly1305.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      algorithm: AES-ECB
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 3
+      mosca_z: 5
+
+  - id: python-weak-dsa
+    patterns:
+      - pattern: DSA.generate(...)
+    message: >
+      DSA is quantum-vulnerable under Shor's algorithm. Migrate to ML-DSA (FIPS 204).
+    languages: [python]
+    severity: WARNING
+    metadata:
+      algorithm: DSA
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 7
+      mosca_y: 3
+      mosca_z: 7
+
   - id: secure-aes-gcm
     patterns:
       - pattern: AES.new(..., AES.MODE_GCM)
@@ -255,7 +290,6 @@ rules:
       mosca_y: 0
       mosca_z: 50
 
-  # ── Python Catch-all ─────────────────────────────────────────────────────────
   - id: py-crypto
     languages: [python]
     severity: WARNING
@@ -273,6 +307,305 @@ rules:
       mosca_z: 5
 
   # ── JavaScript / TypeScript ───────────────────────────────────────────────────
+  - id: js-weak-hash-md5
+    pattern-either:
+      - pattern: $X.createHash("md5")
+      - pattern: $X.createHash('md5')
+      - pattern: createHash("md5")
+      - pattern: createHash('md5')
+    message: >
+      Use of MD5 detected (crypto.createHash). MD5 is broken and susceptible to
+      collision attacks. Migrate to SHA-256.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: MD5
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 3
+      mosca_y: 5
+      mosca_z: 5
+
+  - id: js-weak-hash-sha1
+    pattern-either:
+      - pattern: $X.createHash("sha1")
+      - pattern: $X.createHash('sha1')
+      - pattern: createHash("sha1")
+      - pattern: createHash('sha1')
+    message: >
+      Use of SHA-1 detected (crypto.createHash). SHA-1 is susceptible to
+      collision attacks. Migrate to SHA-256.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: SHA1
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 1
+      mosca_y: 1
+      mosca_z: 10
+
+  - id: js-deprecated-create-cipher
+    pattern-either:
+      - pattern: $X.createCipher($ALGO, ...)
+      - pattern: $X.createDecipher($ALGO, ...)
+    message: >
+      crypto.createCipher()/createDecipher() are deprecated: they derive the key
+      and IV from a single passphrase. Use createCipheriv() with an explicit,
+      cryptographically random IV.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: OPENSSL-LEGACY
+      category: deprecated-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 5
+      mosca_z: 5
+
+  - id: js-insecure-des
+    pattern-either:
+      - pattern: $X.createCipheriv("des-cbc", ...)
+      - pattern: $X.createCipheriv('des-cbc', ...)
+      - pattern: $X.createCipheriv("des-ecb", ...)
+      - pattern: $X.createCipheriv('des-ecb', ...)
+      - pattern: $X.createCipheriv("des-cfb", ...)
+      - pattern: $X.createCipheriv('des-cfb', ...)
+      - pattern: $X.createCipheriv("des-ofb", ...)
+      - pattern: $X.createCipheriv('des-ofb', ...)
+    message: >
+      DES detected (crypto.createCipheriv). DES uses a 56-bit key and has been
+      broken since 1997. Use AES-256-GCM.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: DES
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 6
+      mosca_z: 5
+
+  - id: js-insecure-3des
+    pattern-either:
+      - pattern: $X.createCipheriv("des-ede3-cbc", ...)
+      - pattern: $X.createCipheriv('des-ede3-cbc', ...)
+      - pattern: $X.createCipheriv("des-ede3-ecb", ...)
+      - pattern: $X.createCipheriv('des-ede3-ecb', ...)
+    message: >
+      3DES detected (crypto.createCipheriv). 3DES is slow and vulnerable to
+      Sweet32. Use AES-256-GCM.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      algorithm: 3DES
+      category: weak-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 3
+      mosca_y: 3
+      mosca_z: 10
+
+  - id: js-insecure-rc4
+    pattern-either:
+      - pattern: $X.createCipheriv("rc4", ...)
+      - pattern: $X.createCipheriv('rc4', ...)
+      - pattern: $X.createCipheriv("rc4-drop", ...)
+      - pattern: $X.createCipheriv('rc4-drop', ...)
+    message: >
+      RC4 detected (crypto.createCipheriv). RC4 is a broken stream cipher.
+      Use AES-256-GCM.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: RC4
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 2
+      mosca_y: 2
+      mosca_z: 10
+
+  - id: js-ecb-mode
+    patterns:
+      - pattern: $X.createCipheriv($ALGORITHM, ...)
+      - metavariable-regex:
+          metavariable: $ALGORITHM
+          regex: '(?i).*ecb.*'
+    message: >
+      ECB mode detected in crypto.createCipheriv. Identical plaintext blocks
+      produce identical ciphertext, leaking data patterns. Use AES-GCM.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: AES-ECB
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 3
+      mosca_z: 5
+
+  - id: js-quantum-vulnerable-ec
+    pattern-either:
+      - pattern: $X.generateKeyPairSync("ec", ...)
+      - pattern: $X.generateKeyPairSync('ec', ...)
+      - pattern: $X.generateKeyPair("ec", ...)
+      - pattern: $X.generateKeyPair('ec', ...)
+      - pattern: $X.createECDH(...)
+    message: >
+      Elliptic-curve cryptography (ECDSA/ECDH) is quantum-vulnerable under
+      Shor's algorithm. Migrate to ML-KEM and ML-DSA.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      algorithm: ECDSA-ECDH
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 5
+      mosca_z: 7
+
+  - id: js-cryptojs-md5
+    pattern-either:
+      - pattern: CryptoJS.MD5(...)
+    message: >
+      CryptoJS.MD5 detected. MD5 is cryptographically broken. Migrate to
+      SHA-256 or SHA-3.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: MD5
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 3
+      mosca_y: 5
+      mosca_z: 5
+
+  - id: js-cryptojs-sha1
+    pattern-either:
+      - pattern: CryptoJS.SHA1(...)
+    message: >
+      CryptoJS.SHA1 detected. SHA-1 is susceptible to collision attacks.
+      Migrate to SHA-256.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: SHA1
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 1
+      mosca_y: 1
+      mosca_z: 10
+
+  - id: js-cryptojs-des
+    pattern-either:
+      - pattern: CryptoJS.DES.encrypt(...)
+      - pattern: CryptoJS.DES.decrypt(...)
+      - pattern: CryptoJS.TripleDES.encrypt(...)
+      - pattern: CryptoJS.TripleDES.decrypt(...)
+    message: >
+      CryptoJS DES/3DES detected. DES is broken and 3DES is weak (Sweet32).
+      Use a modern AEAD cipher such as AES-GCM.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: DES
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 6
+      mosca_z: 5
+
+  - id: js-cryptojs-rc4
+    pattern-either:
+      - pattern: CryptoJS.RC4.encrypt(...)
+      - pattern: CryptoJS.RC4.decrypt(...)
+      - pattern: CryptoJS.RC4Drop.encrypt(...)
+      - pattern: CryptoJS.RC4Drop.decrypt(...)
+    message: >
+      CryptoJS RC4 detected. RC4 is a broken stream cipher. Use AES-256-GCM.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: RC4
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 2
+      mosca_y: 2
+      mosca_z: 10
+
+  - id: js-crypto-js-ecb
+    patterns:
+      - pattern: 'CryptoJS.AES.encrypt(..., ..., { mode: CryptoJS.mode.ECB })'
+    message: >
+      CryptoJS AES ECB mode detected. ECB leaks data patterns; use
+      CryptoJS.mode values backed by GCM/CTR with an IV.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      algorithm: AES-ECB
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 3
+      mosca_z: 5
+
+  - id: js-secure-aes-gcm
+    pattern-either:
+      - pattern: $X.createCipheriv("aes-256-gcm", ...)
+      - pattern: $X.createCipheriv('aes-256-gcm', ...)
+      - pattern: $X.createCipheriv("aes-128-gcm", ...)
+      - pattern: $X.createCipheriv('aes-128-gcm', ...)
+      - pattern: $X.createCipheriv("aes-192-gcm", ...)
+      - pattern: $X.createCipheriv('aes-192-gcm', ...)
+    message: >
+      AES-GCM is a secure, authenticated symmetric cipher and is
+      quantum-resistant with 256-bit keys.
+    languages: [javascript, typescript]
+    severity: INFO
+    metadata:
+      algorithm: AES-GCM
+      category: secure-cipher
+      cwe: N/A
+      owasp: N/A
+      mosca_x: 20
+      mosca_y: 1
+      mosca_z: 50
+
+  - id: js-secure-sha256
+    pattern-either:
+      - pattern: $X.createHash("sha256")
+      - pattern: $X.createHash('sha256')
+      - pattern: $X.createHash("sha512")
+      - pattern: $X.createHash('sha512')
+      - pattern: createHash("sha256")
+      - pattern: createHash('sha256')
+      - pattern: createHash("sha512")
+      - pattern: createHash('sha512')
+    message: >
+      SHA-256/SHA-512 is a secure cryptographic hash family.
+    languages: [javascript, typescript]
+    severity: INFO
+    metadata:
+      algorithm: SHA256
+      category: secure-hash
+      cwe: N/A
+      owasp: N/A
+      mosca_x: 10
+      mosca_y: 1
+      mosca_z: 50
+
   - id: js-crypto
     languages: [javascript, typescript]
     severity: WARNING
@@ -280,7 +613,11 @@ rules:
     pattern-either:
       - pattern: $X.createHash(...)
       - pattern: $X.createCipher(...)
+      - pattern: $X.createCipheriv(...)
+      - pattern: $X.createDecipheriv(...)
       - pattern-regex: "require\\('(crypto|bcrypt|crypto-js)'\\)"
+      - pattern-regex: "require\\(\"(crypto|bcrypt|crypto-js)\"\\)"
+      - pattern-regex: "(from|import)[\\s'\"]*(node:)?(crypto|bcrypt|crypto-js)"
     metadata:
       algorithm: LEGACY-JS-CRYPTO
       category: broken-cipher
@@ -291,6 +628,255 @@ rules:
       mosca_z: 5
 
   # ── Java ──────────────────────────────────────────────────────────────────────
+  - id: java-weak-hash-md5
+    patterns:
+      - pattern: MessageDigest.getInstance("MD5")
+    message: >
+      Use of MD5 detected (MessageDigest). MD5 is cryptographically broken.
+      Migrate to SHA-256 or SHA-3.
+    languages: [java]
+    severity: ERROR
+    metadata:
+      algorithm: MD5
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 3
+      mosca_y: 5
+      mosca_z: 5
+
+  - id: java-weak-hash-sha1
+    pattern-either:
+      - pattern: MessageDigest.getInstance("SHA-1")
+      - pattern: MessageDigest.getInstance("SHA1")
+    message: >
+      Use of SHA-1 detected (MessageDigest). SHA-1 is susceptible to collision
+      attacks. Migrate to SHA-256.
+    languages: [java]
+    severity: ERROR
+    metadata:
+      algorithm: SHA1
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 1
+      mosca_y: 1
+      mosca_z: 10
+
+  - id: java-insecure-des
+    pattern-either:
+      - pattern: Cipher.getInstance("DES")
+      - pattern: Cipher.getInstance("DES/ECB/PKCS5Padding")
+      - pattern: Cipher.getInstance("DES/ECB/NoPadding")
+      - pattern: Cipher.getInstance("DES/CBC/PKCS5Padding")
+      - pattern: Cipher.getInstance("DES/CFB/PKCS5Padding")
+      - pattern: Cipher.getInstance("DES/OFB/PKCS5Padding")
+      - pattern: KeyGenerator.getInstance("DES")
+    message: >
+      DES detected (JCE). DES uses a 56-bit key and has been broken since 1997.
+      Use AES-GCM instead.
+    languages: [java]
+    severity: ERROR
+    metadata:
+      algorithm: DES
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 6
+      mosca_z: 5
+
+  - id: java-insecure-3des
+    pattern-either:
+      - pattern: Cipher.getInstance("DESede")
+      - pattern: Cipher.getInstance("DESede/CBC/PKCS5Padding")
+      - pattern: Cipher.getInstance("DESede/ECB/PKCS5Padding")
+      - pattern: KeyGenerator.getInstance("DESede")
+    message: >
+      3DES detected (JCE). 3DES is slow and vulnerable to Sweet32. Use AES-GCM.
+    languages: [java]
+    severity: WARNING
+    metadata:
+      algorithm: 3DES
+      category: weak-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 3
+      mosca_y: 3
+      mosca_z: 10
+
+  - id: java-insecure-rc4
+    pattern-either:
+      - pattern: Cipher.getInstance("RC4")
+      - pattern: Cipher.getInstance("ARC4")
+      - pattern: Cipher.getInstance("RC4/None/NoPadding")
+      - pattern: KeyGenerator.getInstance("RC4")
+      - pattern: KeyGenerator.getInstance("ARC4")
+    message: >
+      RC4 detected (JCE). RC4 is a broken stream cipher. Use AES-GCM.
+    languages: [java]
+    severity: ERROR
+    metadata:
+      algorithm: RC4
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 2
+      mosca_y: 2
+      mosca_z: 10
+
+  - id: java-insecure-blowfish
+    pattern-either:
+      - pattern: Cipher.getInstance("Blowfish")
+      - pattern: Cipher.getInstance("Blowfish/CBC/PKCS5Padding")
+      - pattern: Cipher.getInstance("Blowfish/ECB/PKCS5Padding")
+      - pattern: KeyGenerator.getInstance("Blowfish")
+    message: >
+      Blowfish detected (JCE). Blowfish has a 64-bit block size and is
+      vulnerable to birthday attacks. Use AES-GCM.
+    languages: [java]
+    severity: WARNING
+    metadata:
+      algorithm: BLOWFISH
+      category: weak-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 2
+      mosca_y: 2
+      mosca_z: 10
+
+  - id: java-ecb-mode
+    pattern-either:
+      - pattern: Cipher.getInstance("AES/ECB/PKCS5Padding")
+      - pattern: Cipher.getInstance("AES/ECB/NoPadding")
+      - pattern: Cipher.getInstance("DES/ECB/PKCS5Padding")
+    message: >
+      ECB mode detected (JCE). Identical plaintext blocks produce identical
+      ciphertext, leaking data patterns. Use AES-GCM/CTR with an IV.
+    languages: [java]
+    severity: ERROR
+    metadata:
+      algorithm: AES-ECB
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 3
+      mosca_z: 5
+
+  - id: java-quantum-vulnerable-rsa
+    pattern-either:
+      - pattern: KeyPairGenerator.getInstance("RSA")
+      - pattern: KeyFactory.getInstance("RSA")
+      - pattern: Cipher.getInstance("RSA/ECB/PKCS1Padding")
+      - pattern: Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
+    message: >
+      RSA is classically secure but quantum-vulnerable (Shor's algorithm).
+      Migrate to ML-KEM (FIPS 203).
+    languages: [java]
+    severity: WARNING
+    metadata:
+      algorithm: RSA
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 15
+      mosca_y: 5
+      mosca_z: 7
+
+  - id: java-quantum-vulnerable-ec
+    pattern-either:
+      - pattern: KeyPairGenerator.getInstance("EC")
+      - pattern: KeyFactory.getInstance("EC")
+      - pattern: KeyAgreement.getInstance("ECDH")
+      - pattern: Signature.getInstance("SHA256withECDSA")
+      - pattern: Signature.getInstance("SHA384withECDSA")
+    message: >
+      Elliptic-curve cryptography (ECDSA/ECDH) is quantum-vulnerable.
+      Migrate to ML-DSA and ML-KEM.
+    languages: [java]
+    severity: WARNING
+    metadata:
+      algorithm: ECDSA-ECDH
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 5
+      mosca_z: 7
+
+  - id: java-quantum-vulnerable-dh
+    pattern-either:
+      - pattern: KeyPairGenerator.getInstance("DH")
+      - pattern: KeyPairGenerator.getInstance("DiffieHellman")
+      - pattern: KeyAgreement.getInstance("DH")
+    message: >
+      Diffie-Hellman key exchange is quantum-vulnerable. Migrate to ML-KEM
+      (FIPS 203).
+    languages: [java]
+    severity: WARNING
+    metadata:
+      algorithm: DH
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 7
+      mosca_y: 3
+      mosca_z: 7
+
+  - id: java-quantum-vulnerable-dsa
+    pattern-either:
+      - pattern: KeyPairGenerator.getInstance("DSA")
+      - pattern: KeyFactory.getInstance("DSA")
+      - pattern: Signature.getInstance("SHA256withDSA")
+    message: >
+      DSA is quantum-vulnerable. Migrate to ML-DSA (FIPS 204).
+    languages: [java]
+    severity: WARNING
+    metadata:
+      algorithm: DSA
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 7
+      mosca_y: 3
+      mosca_z: 7
+
+  - id: java-secure-aes-gcm
+    patterns:
+      - pattern: Cipher.getInstance("AES/GCM/NoPadding")
+    message: >
+      AES-GCM is a secure, authenticated symmetric cipher and is
+      quantum-resistant with 256-bit keys.
+    languages: [java]
+    severity: INFO
+    metadata:
+      algorithm: AES-GCM
+      category: secure-cipher
+      cwe: N/A
+      owasp: N/A
+      mosca_x: 20
+      mosca_y: 1
+      mosca_z: 50
+
+  - id: java-secure-sha256
+    pattern-either:
+      - pattern: MessageDigest.getInstance("SHA-256")
+      - pattern: MessageDigest.getInstance("SHA-512")
+      - pattern: MessageDigest.getInstance("SHA3-256")
+    message: >
+      SHA-256/SHA-512 is a secure cryptographic hash family.
+    languages: [java]
+    severity: INFO
+    metadata:
+      algorithm: SHA256
+      category: secure-hash
+      cwe: N/A
+      owasp: N/A
+      mosca_x: 10
+      mosca_y: 1
+      mosca_z: 50
+
   - id: java-crypto
     languages: [java]
     severity: WARNING
@@ -298,6 +884,10 @@ rules:
     pattern-either:
       - pattern: MessageDigest.getInstance(...)
       - pattern: Cipher.getInstance(...)
+      - pattern: KeyPairGenerator.getInstance(...)
+      - pattern: KeyFactory.getInstance(...)
+      - pattern: KeyAgreement.getInstance(...)
+      - pattern: Signature.getInstance(...)
       - pattern-regex: "import javax\\.crypto\\..*"
     metadata:
       algorithm: LEGACY-JAVA-CRYPTO
@@ -309,6 +899,245 @@ rules:
       mosca_z: 5
 
   # ── C / C++ ───────────────────────────────────────────────────────────────────
+  - id: c-weak-hash-md5
+    pattern-either:
+      - pattern: MD5_Init(...)
+      - pattern: MD5(...)
+      - pattern: EVP_md5()
+    message: >
+      MD5 detected (OpenSSL). MD5 is cryptographically broken. Migrate to
+      SHA-256 via EVP_sha256().
+    languages: [c, cpp]
+    severity: ERROR
+    metadata:
+      algorithm: MD5
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 3
+      mosca_y: 5
+      mosca_z: 5
+
+  - id: c-weak-hash-sha1
+    pattern-either:
+      - pattern: SHA1_Init(...)
+      - pattern: SHA1(...)
+      - pattern: EVP_sha1()
+    message: >
+      SHA-1 detected (OpenSSL). SHA-1 is susceptible to collision attacks.
+      Migrate to SHA-256 via EVP_sha256().
+    languages: [c, cpp]
+    severity: ERROR
+    metadata:
+      algorithm: SHA1
+      category: weak-hash
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 1
+      mosca_y: 1
+      mosca_z: 10
+
+  - id: c-insecure-des
+    pattern-either:
+      - pattern: DES_set_key(...)
+      - pattern: DES_set_key_checked(...)
+      - pattern: DES_ecb_encrypt(...)
+      - pattern: DES_cbc_encrypt(...)
+      - pattern: DES_cfb64_encrypt(...)
+      - pattern: EVP_des_ecb()
+      - pattern: EVP_des_cbc()
+    message: >
+      DES detected (OpenSSL). DES uses a 56-bit key and has been broken since
+      1997. Use AES-256-GCM with EVP_aes_256_gcm().
+    languages: [c, cpp]
+    severity: ERROR
+    metadata:
+      algorithm: DES
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 6
+      mosca_z: 5
+
+  - id: c-insecure-3des
+    pattern-either:
+      - pattern: DES_ede3_cbc_encrypt(...)
+      - pattern: DES_ede3_ecb_encrypt(...)
+      - pattern: DES_ede3_cfb64_encrypt(...)
+      - pattern: EVP_des_ede3()
+      - pattern: EVP_des_ede3_cbc()
+    message: >
+      3DES detected (OpenSSL). 3DES is slow and vulnerable to Sweet32. Use
+      AES-256-GCM.
+    languages: [c, cpp]
+    severity: WARNING
+    metadata:
+      algorithm: 3DES
+      category: weak-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 3
+      mosca_y: 3
+      mosca_z: 10
+
+  - id: c-insecure-rc4
+    pattern-either:
+      - pattern: RC4_set_key(...)
+      - pattern: RC4(...)
+      - pattern: EVP_rc4()
+    message: >
+      RC4 detected (OpenSSL). RC4 is a broken stream cipher. Use AES-256-GCM.
+    languages: [c, cpp]
+    severity: ERROR
+    metadata:
+      algorithm: RC4
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 2
+      mosca_y: 2
+      mosca_z: 10
+
+  - id: c-insecure-blowfish
+    pattern-either:
+      - pattern: BF_set_key(...)
+      - pattern: BF_ecb_encrypt(...)
+      - pattern: BF_cbc_encrypt(...)
+      - pattern: BF_cfb64_encrypt(...)
+      - pattern: EVP_bf_cbc()
+      - pattern: EVP_bf_ecb()
+    message: >
+      Blowfish detected (OpenSSL). Blowfish has a 64-bit block size and is
+      vulnerable to birthday attacks. Use AES-GCM.
+    languages: [c, cpp]
+    severity: WARNING
+    metadata:
+      algorithm: BLOWFISH
+      category: weak-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 2
+      mosca_y: 2
+      mosca_z: 10
+
+  - id: c-ecb-mode
+    pattern-either:
+      - pattern: AES_ecb_encrypt(...)
+      - pattern: EVP_aes_128_ecb()
+      - pattern: EVP_aes_192_ecb()
+      - pattern: EVP_aes_256_ecb()
+    message: >
+      ECB mode detected (OpenSSL). Identical plaintext blocks produce identical
+      ciphertext, leaking data patterns. Use GCM mode.
+    languages: [c, cpp]
+    severity: ERROR
+    metadata:
+      algorithm: AES-ECB
+      category: broken-cipher
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 3
+      mosca_z: 5
+
+  - id: c-quantum-vulnerable-rsa
+    pattern-either:
+      - pattern: RSA_generate_key(...)
+      - pattern: RSA_generate_key_ex(...)
+    message: >
+      RSA is classically secure but quantum-vulnerable (Shor's algorithm).
+      Migrate to ML-KEM (FIPS 203).
+    languages: [c, cpp]
+    severity: WARNING
+    metadata:
+      algorithm: RSA
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 15
+      mosca_y: 5
+      mosca_z: 7
+
+  - id: c-quantum-vulnerable-ec
+    pattern-either:
+      - pattern: EC_KEY_new_by_curve_name(...)
+      - pattern: EC_KEY_new(...)
+      - pattern: EC_KEY_generate_key(...)
+      - pattern: EC_POINT_mul(...)
+      - pattern: ECDSA_sign(...)
+      - pattern: ECDSA_verify(...)
+      - pattern: ECDH_compute_key(...)
+    message: >
+      Elliptic-curve cryptography (ECDSA/ECDH) is quantum-vulnerable. Migrate
+      to ML-KEM and ML-DSA.
+    languages: [c, cpp]
+    severity: WARNING
+    metadata:
+      algorithm: ECDSA-ECDH
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 5
+      mosca_y: 5
+      mosca_z: 7
+
+  - id: c-quantum-vulnerable-dh
+    pattern-either:
+      - pattern: DH_generate_key(...)
+      - pattern: DH_compute_key(...)
+    message: >
+      Diffie-Hellman key exchange is quantum-vulnerable. Migrate to ML-KEM
+      (FIPS 203).
+    languages: [c, cpp]
+    severity: WARNING
+    metadata:
+      algorithm: DH
+      category: quantum-vulnerable
+      cwe: CWE-327
+      owasp: A02:2021
+      mosca_x: 7
+      mosca_y: 3
+      mosca_z: 7
+
+  - id: c-secure-sha256
+    pattern-either:
+      - pattern: SHA256_Init(...)
+      - pattern: SHA256(...)
+      - pattern: EVP_sha256()
+      - pattern: EVP_sha512()
+    message: >
+      SHA-256/SHA-512 is a secure cryptographic hash family.
+    languages: [c, cpp]
+    severity: INFO
+    metadata:
+      algorithm: SHA256
+      category: secure-hash
+      cwe: N/A
+      owasp: N/A
+      mosca_x: 10
+      mosca_y: 1
+      mosca_z: 50
+
+  - id: c-secure-aes-gcm
+    pattern-either:
+      - pattern: EVP_aes_256_gcm()
+      - pattern: EVP_aes_128_gcm()
+      - pattern: EVP_aes_192_gcm()
+    message: >
+      AES-GCM is a secure, authenticated symmetric cipher and is
+      quantum-resistant with 256-bit keys.
+    languages: [c, cpp]
+    severity: INFO
+    metadata:
+      algorithm: AES-GCM
+      category: secure-cipher
+      cwe: N/A
+      owasp: N/A
+      mosca_x: 20
+      mosca_y: 1
+      mosca_z: 50
+
   - id: c-cpp-crypto
     languages: [c, cpp]
     severity: WARNING
