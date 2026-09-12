@@ -15,12 +15,29 @@ POST /scan
 POST /scan/upload
     Accepts a zip file (multipart/form-data) — the browser zips the user's
     selected local folder client-side using JSZip, then uploads it here.
-    The zip is extracted to a temp directory and scanned with the same
-    Semgrep + SCA pipeline.  Only the resulting CycloneDX BOM is returned;
-    raw source files are never persisted.
+
+POST /scan/binary
+    Accepts a compiled binary file (multipart/form-data).
+    Supports: .exe, .dll, .so, .elf, .bin, .dylib, .sys
+    Runs binary_scanner (PE/ELF symbol tables + crypto constant scan).
+    Returns a CycloneDX 1.6 BOM with component.type = "file".
+
+POST /scan/container/upload
+    Accepts a Docker/OCI image .tar archive (multipart/form-data).
+    Max size: 500 MB.  Extracts all layers and runs AST + binary + SCA.
+    Returns a merged CycloneDX 1.6 BOM with component.type = "container".
+
+POST /scan/container
+    Body: { "image_tag": "nginx:latest" }
+    Pulls the image via `docker save`, then runs the same container pipeline.
+    Requires Docker to be installed and running on the server.
 
 GET /health
     Simple liveness probe.
+
+GET /health/docker
+    Returns { "docker": true/false } — used by the UI to disable the
+    image-tag input when Docker is not installed on the server.
 """
 
 from __future__ import annotations
@@ -42,8 +59,18 @@ from pydantic import BaseModel, field_validator
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core.scanner import run_semgrep_scan
-from core.translator import transform_semgrep_to_cyclonedx
+from core.translator import (
+    transform_semgrep_to_cyclonedx,
+    transform_binary_findings_to_cyclonedx,
+    merge_boms,
+)
 from core.dependency_scanner import scan_dependencies
+from binary_scanner import scan_binary
+from container_scanner import (
+    scan_container_tar,
+    scan_container_image,
+    is_docker_available,
+)
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -89,6 +116,23 @@ class ScanRequest(BaseModel):
         if not v:
             raise ValueError("target_directory must not be empty")
         return v
+
+
+class ContainerTagRequest(BaseModel):
+    image_tag: str
+
+    @field_validator("image_tag")
+    @classmethod
+    def must_not_be_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("image_tag must not be empty")
+        return v
+
+
+class DockerStatusResponse(BaseModel):
+    docker: bool
+    message: str
 
 
 class HealthResponse(BaseModel):
@@ -160,6 +204,27 @@ def _clone_repo(url: str, dest: Path) -> None:
 async def health() -> HealthResponse:
     return HealthResponse(status="ok", version="1.0.0")
 
+
+@app.get(
+    "/health/docker",
+    response_model=DockerStatusResponse,
+    tags=["ops"],
+    summary="Docker availability probe — used by the UI to enable/disable container tag scanning",
+)
+async def health_docker() -> DockerStatusResponse:
+    """
+    Returns whether Docker is installed and running on the server.
+    The frontend uses this to disable the container image-tag input
+    field (with a tooltip) when Docker is not available.
+    """
+    available = await run_in_threadpool(is_docker_available)
+    return DockerStatusResponse(
+        docker=available,
+        message="Docker is available" if available
+        else "Docker is not installed or not running on this server. "
+             "Container image-tag scanning is disabled. "
+             "You can still scan .tar exports via the upload endpoint.",
+    )
 
 @app.post(
     "/scan",
@@ -250,6 +315,205 @@ async def scan(request: ScanRequest) -> dict:
             except Exception as cleanup_err:
                 logger.warning("Failed to clean up temp dir: %s", cleanup_err)
 
+
+# ── Allowed binary extensions ─────────────────────────────────────────────────────
+
+_BINARY_EXTS = frozenset({".exe", ".dll", ".so", ".elf", ".bin", ".dylib", ".sys", ".o"})
+_MAX_BINARY_BYTES   = 100 * 1024 * 1024   #  100 MB — binaries are rarely larger
+_MAX_CONTAINER_BYTES = 500 * 1024 * 1024  #  500 MB — container layers compressed
+
+
+@app.post(
+    "/scan/binary",
+    tags=["scanner"],
+    summary="Run a cryptographic scan on a compiled binary (.exe / .dll / .so / .elf / .bin / .dylib)",
+    response_description="CycloneDX 1.6 BOM with binary cryptographic findings",
+)
+async def scan_binary_upload(file: UploadFile = File(...)) -> dict:
+    """
+    Accepts a compiled binary file as multipart/form-data.
+
+    Supported formats
+    -----------------
+    Windows PE executables/DLLs  (.exe, .dll, .sys)
+    ELF shared libraries          (.so, .elf, .o)
+    macOS / UNIX shared libs      (.dylib)
+    Raw binary blobs              (.bin)
+
+    Max size: 100 MB
+
+    The scanner:
+    1. Detects PE vs ELF via magic bytes.
+    2. Extracts imported/exported crypto symbol names (pefile / pyelftools).
+    3. Scans for hardcoded crypto constants (AES S-Box, SHA/MD5 IVs, PEM headers).
+    4. Normalises findings into a CycloneDX 1.6 BOM (component.type = "file").
+    """
+    raw = await file.read()
+
+    if len(raw) > _MAX_BINARY_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"Binary too large ({len(raw) // (1024 * 1024)} MB). "
+                f"Maximum is {_MAX_BINARY_BYTES // (1024 * 1024)} MB."
+            ),
+        )
+
+    suffix = Path(file.filename or "binary").suffix.lower() or ".bin"
+
+    tmp_dir_obj = tempfile.TemporaryDirectory(prefix="ecdat_binary_")
+    try:
+        tmp_path = Path(tmp_dir_obj.name) / f"target{suffix}"
+        tmp_path.write_bytes(raw)
+
+        logger.info("Binary scan: %s (%d bytes)", file.filename, len(raw))
+        binary_findings: list[dict] = await run_in_threadpool(scan_binary, str(tmp_path))
+        logger.info("Binary scan complete: %d finding(s)", len(binary_findings))
+
+        bom = transform_binary_findings_to_cyclonedx(binary_findings, source_type="file")
+
+        # Stamp the original filename into the BOM metadata
+        bom["metadata"]["component"]["name"] = file.filename or "binary-upload"
+
+        logger.info(
+            "Binary BOM: %d component(s), %d CRITICAL",
+            len(bom["components"]), bom["summary"]["critical_count"],
+        )
+        return bom
+
+    finally:
+        try:
+            tmp_dir_obj.cleanup()
+        except Exception as e:
+            logger.warning("Binary temp cleanup failed: %s", e)
+
+
+@app.post(
+    "/scan/container/upload",
+    tags=["scanner"],
+    summary="Run a full cryptographic scan on a Docker/OCI image .tar archive",
+    response_description="Merged CycloneDX 1.6 BOM (AST + binary + SCA)",
+)
+async def scan_container_upload(file: UploadFile = File(...)) -> dict:
+    """
+    Accepts a Docker / OCI image ``.tar`` archive as multipart/form-data.
+
+    How to produce a compatible .tar
+    ---------------------------------
+    docker save nginx:latest -o nginx.tar
+
+    Max size: 500 MB (displayed in the upload UI)
+
+    Pipeline
+    --------
+    1. Extract all OCI/Docker filesystem layers into a temp directory.
+    2. Run Semgrep AST scan over extracted source files.
+    3. Run binary_scanner over extracted ELF/PE executables.
+    4. Run SCA (dependency manifests) scan.
+    5. Merge all results into a single CycloneDX 1.6 BOM
+       (component.type = "container").
+    """
+    raw = await file.read()
+
+    if len(raw) > _MAX_CONTAINER_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"Container archive too large ({len(raw) // (1024 * 1024)} MB). "
+                f"Maximum is {_MAX_CONTAINER_BYTES // (1024 * 1024)} MB."
+            ),
+        )
+
+    # Validate it's a tar
+    import io as _io
+    try:
+        import tarfile as _tarfile
+        if not _tarfile.is_tarfile(_io.BytesIO(raw)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Uploaded file is not a valid tar archive.",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # tarfile.is_tarfile may raise on very large buffers — proceed anyway
+
+    tmp_dir_obj = tempfile.TemporaryDirectory(prefix="ecdat_ctrup_")
+    try:
+        tar_path = Path(tmp_dir_obj.name) / "image.tar"
+        tar_path.write_bytes(raw)
+        del raw   # free memory before the heavy pipeline runs
+
+        logger.info("Container tar scan: %s (%d MB)", file.filename, tar_path.stat().st_size // (1024 * 1024))
+        result = await scan_container_tar(str(tar_path))
+
+        # Build merged BOM from all three sub-results
+        semgrep_bom = transform_semgrep_to_cyclonedx(
+            result["semgrep"], result["dependency_findings"]
+        )
+        binary_bom = transform_binary_findings_to_cyclonedx(
+            result["binary_findings"], source_type="container"
+        )
+        bom = merge_boms([semgrep_bom, binary_bom])
+        bom["metadata"]["component"]["type"]    = "container"
+        bom["metadata"]["component"]["name"]    = file.filename or "container-image"
+
+        logger.info(
+            "Container BOM: %d component(s), %d CRITICAL",
+            len(bom["components"]), bom["summary"]["critical_count"],
+        )
+        return bom
+
+    finally:
+        try:
+            tmp_dir_obj.cleanup()
+        except Exception as e:
+            logger.warning("Container tar temp cleanup failed: %s", e)
+
+
+@app.post(
+    "/scan/container",
+    tags=["scanner"],
+    summary="Run a cryptographic scan on a Docker image by tag (requires Docker on server)",
+    response_description="Merged CycloneDX 1.6 BOM (AST + binary + SCA)",
+)
+async def scan_container_by_tag(request: ContainerTagRequest) -> dict:
+    """
+    Pulls the specified Docker image via ``docker save``, extracts all layers,
+    and runs the full ECDAT pipeline (Semgrep AST + binary + SCA).
+
+    Requires Docker to be installed and running on the server.
+    Check ``GET /health/docker`` to verify availability before calling this.
+
+    Example body
+    ------------
+    { "image_tag": "nginx:latest" }
+    { "image_tag": "redis:7.0" }
+    { "image_tag": "docker.io/library/ubuntu:focal" }
+    """
+    try:
+        result = await scan_container_image(request.image_tag)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    semgrep_bom = transform_semgrep_to_cyclonedx(
+        result["semgrep"], result["dependency_findings"]
+    )
+    binary_bom = transform_binary_findings_to_cyclonedx(
+        result["binary_findings"], source_type="container"
+    )
+    bom = merge_boms([semgrep_bom, binary_bom])
+    bom["metadata"]["component"]["type"] = "container"
+    bom["metadata"]["component"]["name"] = request.image_tag
+
+    logger.info(
+        "Container tag BOM (%s): %d component(s), %d CRITICAL",
+        request.image_tag, len(bom["components"]), bom["summary"]["critical_count"],
+    )
+    return bom
 
 @app.post(
     "/scan/upload",

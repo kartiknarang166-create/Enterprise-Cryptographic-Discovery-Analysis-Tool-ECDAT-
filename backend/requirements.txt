@@ -2,3 +2,6 @@ fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.7.0
 python-multipart>=0.0.9
+# Binary analysis (optional — graceful fallback to string scan if absent)
+pefile>=2023.2.7
+pyelftools>=0.31

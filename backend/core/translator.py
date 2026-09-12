@@ -1,9 +1,16 @@
 """
 core/translator.py
-Transforms raw Semgrep JSON output into a CycloneDX 1.6 SBOM document with:
+Transforms raw Semgrep JSON output (and binary/container scanner output)
+into CycloneDX 1.6 SBOM documents with:
   - cryptographic-asset component type
   - Mosca's Theorem risk scoring  (X + Y > Z  =>  CRITICAL)
   - NIST FIPS 203/204 post-quantum migration recommendations
+
+Public API
+----------
+transform_semgrep_to_cyclonedx(semgrep_json, dependency_findings) -> dict
+transform_binary_findings_to_cyclonedx(binary_findings, source_type)  -> dict
+merge_boms(bom_list)                                                    -> dict
 """
 
 from __future__ import annotations
@@ -159,52 +166,7 @@ def transform_semgrep_to_cyclonedx(semgrep_json: dict, dependency_findings: list
 
     # ── Append Dependency Findings ───────────────────────────────────────────
     if dependency_findings:
-        for dep in dependency_findings:
-            component = {
-                "type": "library",
-                "bom-ref": str(uuid.uuid4()),
-                "name": dep["package"],
-                "version": "N/A",
-                "description": dep["recommendation"],
-                "evidence": {
-                    "occurrences": [
-                        {
-                            "location": dep["file"],
-                            "line": 1,
-                            "endLine": 1,
-                        }
-                    ]
-                },
-                "properties": [
-                    {"name": "ecdat:category", "value": "dependency-vulnerability"},
-                ],
-                "vulnerabilities": [
-                    {
-                        "id": f"VULN-{dep['package'].upper()}",
-                        "description": dep["recommendation"],
-                        "ratings": [
-                            {
-                                "severity": "critical",
-                                "method": "other",
-                            }
-                        ],
-                    }
-                ],
-                "mosca": {
-                    "x_years_data_sensitivity": 0,
-                    "y_years_migration_time": 0,
-                    "z_years_until_crqc": 0,
-                    "equation": "N/A",
-                    "risk_level": "CRITICAL",
-                },
-                "recommendation": {
-                    "action": dep["recommendation"],
-                    "pqc_algorithm": "",
-                    "rationale": "Vulnerable third-party dependency.",
-                    "pqc_standard": "N/A (Classical)"
-                }
-            }
-            components.append(component)
+        _append_dependency_components(components, dependency_findings)
 
     # ── Assemble CycloneDX 1.6 BOM ───────────────────────────────────────────
     bom: dict = {
@@ -241,6 +203,229 @@ def transform_semgrep_to_cyclonedx(semgrep_json: dict, dependency_findings: list
     }
 
     return bom
+
+
+# ── Binary / Container findings translator ────────────────────────────────────
+
+def transform_binary_findings_to_cyclonedx(
+    binary_findings: list[dict],
+    source_type: str = "file",
+    dependency_findings: list[dict] | None = None,
+) -> dict:
+    """
+    Convert a list of binary_scanner finding dicts into a CycloneDX 1.6 BOM.
+
+    Parameters
+    ----------
+    binary_findings : list[dict]
+        Output of ``binary_scanner.scan_binary()`` or the ``binary_findings``
+        key from ``container_scanner.scan_container_tar()``.
+    source_type : str
+        ``"file"`` for a direct binary upload, ``"container"`` for a Docker image.
+    dependency_findings : list[dict] | None
+        Optional SCA findings to merge in (same format as in semgrep translator).
+
+    Returns
+    -------
+    dict
+        CycloneDX 1.6 BOM ready for JSON serialisation.
+    """
+    components: list[dict] = []
+
+    for finding in binary_findings:
+        algorithm_raw: str = finding.get("algorithm", "UNKNOWN")
+        message: str        = finding.get("message",   "Cryptographic usage detected in binary")
+        category: str       = finding.get("category",  "binary-crypto-symbol")
+        file_path: str      = finding.get("file",       "unknown")
+        symbol: str         = finding.get("symbol",     "")
+        offset              = finding.get("offset")
+        severity: str       = finding.get("severity",   "WARNING")
+        cwe: str            = finding.get("cwe",         "CWE-327")
+        owasp: str          = finding.get("owasp",       "A02:2021")
+
+        # Mosca params
+        x: int = int(finding.get("mosca_x", DEFAULT_MOSCA_X))
+        y: int = int(finding.get("mosca_y", DEFAULT_MOSCA_Y))
+        z: int = int(finding.get("mosca_z", DEFAULT_MOSCA_Z))
+        risk_level = _mosca_risk(x, y, z)
+
+        recommendation = get_recommendation(algorithm_raw)
+
+        component: dict = {
+            "type": "cryptographic-asset",
+            "bom-ref": str(uuid.uuid4()),
+            "name": algorithm_raw,
+            "version": "N/A",
+            "description": message,
+            "cryptoProperties": {
+                "assetType": "algorithm",
+                "algorithmProperties": {
+                    "primitive":               _map_primitive(algorithm_raw),
+                    "parameterSetIdentifier": algorithm_raw,
+                    "nistQuantumSecurityLevel": _nist_qs_level(algorithm_raw),
+                },
+                "oid": _map_oid(algorithm_raw),
+            },
+            "evidence": {
+                "occurrences": [
+                    {
+                        "location": file_path,
+                        "line":     offset if isinstance(offset, int) else 0,
+                        "endLine":  offset if isinstance(offset, int) else 0,
+                        "symbol":   symbol,
+                    }
+                ]
+            },
+            "properties": [
+                {"name": "ecdat:source",    "value": "binary"},
+                {"name": "ecdat:category",  "value": category},
+                {"name": "ecdat:symbol",    "value": symbol},
+                {"name": "semgrep:severity", "value": severity},
+                {"name": "semgrep:cwe",     "value": cwe},
+                {"name": "semgrep:owasp",   "value": owasp},
+            ],
+            "vulnerabilities": [
+                {
+                    "id":          f"BINARY-{algorithm_raw.upper()}-{str(uuid.uuid4())[:8]}",
+                    "description": message,
+                    "ratings": [{"severity": _severity_to_cdx(severity), "method": "other"}],
+                }
+            ],
+            "mosca": {
+                "x_years_data_sensitivity": x,
+                "y_years_migration_time":   y,
+                "z_years_until_crqc":       z,
+                "equation":   f"{x} + {y} > {z}  =>  {'TRUE' if (x + y) > z else 'FALSE'}",
+                "risk_level": risk_level,
+            },
+            "recommendation": recommendation,
+        }
+        components.append(component)
+
+    # Append SCA dependency findings (reuse existing logic)
+    if dependency_findings:
+        _append_dependency_components(components, dependency_findings)
+
+    bom: dict = {
+        "bomFormat":    "CycloneDX",
+        "specVersion":  "1.6",
+        "serialNumber": f"urn:uuid:{uuid.uuid4()}",
+        "version":      1,
+        "metadata": {
+            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            "tools": [
+                {
+                    "vendor": "ECDAT",
+                    "name":   "Enterprise Cryptographic Discovery & Analysis Tool",
+                    "version": "1.0.0",
+                }
+            ],
+            "component": {
+                "type":    source_type,   # "file" | "container"
+                "name":    "ECDAT Scan Target",
+                "version": "1.0.0",
+            },
+        },
+        "components": components,
+        "summary": {
+            "total_findings": len(components),
+            "critical_count": sum(1 for c in components if c["mosca"]["risk_level"] == "CRITICAL"),
+            "low_count":      sum(1 for c in components if c["mosca"]["risk_level"] == "LOW"),
+        },
+    }
+    return bom
+
+
+def merge_boms(bom_list: list[dict]) -> dict:
+    """
+    Merge multiple CycloneDX BOMs (e.g., from a container scan that ran both
+    the AST and binary pipelines) into a single unified BOM.
+
+    The first BOM in the list provides the metadata skeleton; all components
+    from every BOM are combined and the summary counters are recomputed.
+
+    Parameters
+    ----------
+    bom_list : list[dict]
+        A list of CycloneDX 1.6 BOM dicts.  Empty / error BOMs are skipped.
+
+    Returns
+    -------
+    dict
+        A merged CycloneDX 1.6 BOM.
+    """
+    valid = [b for b in bom_list if b and not b.get("error") and b.get("components") is not None]
+    if not valid:
+        return _error_bom("All sub-scans produced no results.")
+
+    base = valid[0]
+    all_components: list[dict] = []
+    for bom in valid:
+        all_components.extend(bom.get("components", []))
+
+    merged: dict = {
+        "bomFormat":   "CycloneDX",
+        "specVersion": "1.6",
+        "serialNumber": f"urn:uuid:{uuid.uuid4()}",
+        "version":     1,
+        "metadata":    base.get("metadata", {}),
+        "components":  all_components,
+        "summary": {
+            "total_findings": len(all_components),
+            "critical_count": sum(
+                1 for c in all_components
+                if c.get("mosca", {}).get("risk_level") == "CRITICAL"
+            ),
+            "low_count": sum(
+                1 for c in all_components
+                if c.get("mosca", {}).get("risk_level") == "LOW"
+            ),
+        },
+    }
+    return merged
+
+
+# ── Internal shared helpers ───────────────────────────────────────────────────
+
+def _append_dependency_components(components: list[dict], dependency_findings: list[dict]) -> None:
+    """Shared helper: append SCA dependency findings as CycloneDX components."""
+    for dep in dependency_findings:
+        component = {
+            "type": "library",
+            "bom-ref": str(uuid.uuid4()),
+            "name": dep["package"],
+            "version": "N/A",
+            "description": dep["recommendation"],
+            "evidence": {
+                "occurrences": [
+                    {"location": dep["file"], "line": 1, "endLine": 1}
+                ]
+            },
+            "properties": [
+                {"name": "ecdat:category", "value": "dependency-vulnerability"},
+            ],
+            "vulnerabilities": [
+                {
+                    "id": f"VULN-{dep['package'].upper()}",
+                    "description": dep["recommendation"],
+                    "ratings": [{"severity": "critical", "method": "other"}],
+                }
+            ],
+            "mosca": {
+                "x_years_data_sensitivity": 0,
+                "y_years_migration_time":   0,
+                "z_years_until_crqc":       0,
+                "equation":   "N/A",
+                "risk_level": "CRITICAL",
+            },
+            "recommendation": {
+                "action":        dep["recommendation"],
+                "pqc_algorithm": "",
+                "rationale":     "Vulnerable third-party dependency.",
+                "pqc_standard":  "N/A (Classical)",
+            },
+        }
+        components.append(component)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
