@@ -28,8 +28,8 @@ const DS = {
   emerald:    '#6ee7b7',
 }
 
-// ── Flat progress bar (non-interactive — no thumb) ───────────────────────────
-function ProgressBar({ label, value, min, max, color, yearValue }) {
+// ── Interactive progress bar (slider) ───────────────────────────
+function ProgressBar({ label, value, min, max, color, yearValue, onChange }) {
   const pct = Math.round(((value - min) / (max - min)) * 100)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -54,10 +54,10 @@ function ProgressBar({ label, value, min, max, color, yearValue }) {
           height: 4,
           borderRadius: 2,
           background: DS.outlineVar,
-          overflow: 'hidden',
+          position: 'relative',
         }}
       >
-        {/* Fill — flat, no thumb, pointer-events none */}
+        {/* Fill — flat, pointer-events none */}
         <div
           style={{
             height: '100%',
@@ -66,6 +66,42 @@ function ProgressBar({ label, value, min, max, color, yearValue }) {
             background: color,
             pointerEvents: 'none',
             transition: 'width 0.3s ease',
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+          }}
+        >
+          {/* White thumb ball */}
+          <div
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              background: '#ffffff',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+              transform: 'translateX(50%)',
+            }}
+          />
+        </div>
+        {/* Invisible Slider Input */}
+        <input
+          type="range"
+          min={min}
+          max={max}
+          value={value}
+          onChange={(e) => onChange && onChange(Number(e.target.value))}
+          style={{
+            position: 'absolute',
+            top: -6,
+            left: 0,
+            width: '100%',
+            height: 16,
+            opacity: 0,
+            cursor: 'pointer',
+            margin: 0,
           }}
         />
       </div>
@@ -132,25 +168,28 @@ export default function MoscaWidget({ initialX = 20, initialY = 5, initialZ = 10
         </span>
       </div>
 
-      {/* Progress bars — flat, non-interactive, color matches formula variable */}
+      {/* Progress bars — interactive sliders, color matches formula variable */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <ProgressBar
           label="Data Shelf-Life (X)"
           value={x} min={1} max={30}
           color={DS.xColor}
           yearValue={x}
+          onChange={setX}
         />
         <ProgressBar
           label="Migration Time (Y)"
-          value={y} min={1} max={15}
+          value={y} min={1} max={30}
           color={DS.yColor}
           yearValue={y}
+          onChange={setY}
         />
         <ProgressBar
           label="Quantum Horizon (Z)"
           value={z} min={1} max={30}
           color={DS.zColor}
           yearValue={z}
+          onChange={setZ}
         />
       </div>
 
