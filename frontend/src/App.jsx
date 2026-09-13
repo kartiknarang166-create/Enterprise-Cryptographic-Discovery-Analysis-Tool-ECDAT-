@@ -296,6 +296,7 @@ export default function App() {
   const [showAlgoChart, setShowAlgoChart] = useState(false)
   const [showHeatmap,   setShowHeatmap]   = useState(false)
   const [inventoryFilter, setInventoryFilter] = useState('All')
+  const [showDiscoveryErrors, setShowDiscoveryErrors] = useState(false)
 
   // ── Auth: check session on mount, subscribe to changes ─────────────────────
   useEffect(() => {
@@ -720,7 +721,6 @@ export default function App() {
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '12px 16px 0', gap: 12 }}>
 
         {/* Error banner */}
-        {bom?.discovery_errors?.length > 0 && <div role="status" className="info-card"><strong>Partial discovery: {bom.discovery_errors.length} issue(s)</strong>{bom.discovery_errors.map((issue, i) => <p key={i}>{issue.target}: {issue.error}</p>)}</div>}
         {bom?.summary?.sensitive_data_count > 0 && <div className="info-card" style={{ borderColor: DS.error }}><strong>Sensitive data exposure</strong><p>{bom.summary.sensitive_data_count} assets protect sensitive data beyond the configured quantum horizon.</p></div>}
         {error && (
           <div
@@ -881,6 +881,44 @@ export default function App() {
                   </div>
                 )}
               </div>
+
+              {/* Partial Discovery Errors — collapsible */}
+              {bom?.discovery_errors?.length > 0 && (
+                <div
+                  style={{
+                    width: '100%', background: DS.surfaceLow,
+                    border: `1px solid ${DS.error}50`, borderRadius: 4,
+                    overflow: 'hidden',
+                  }}
+                >
+                  <button
+                    onClick={() => setShowDiscoveryErrors(v => !v)}
+                    style={{
+                      width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '10px 14px', background: `${DS.error}14`, border: 'none',
+                      cursor: 'pointer', transition: 'background 0.15s',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = `${DS.error}22`)}
+                    onMouseLeave={e => (e.currentTarget.style.background = `${DS.error}14`)}
+                  >
+                    <span style={{ fontSize: 14, fontWeight: 600, color: DS.error, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 11, transition: 'transform 0.2s', display: 'inline-block', transform: showDiscoveryErrors ? 'rotate(90deg)' : 'rotate(0deg)', color: DS.error }}>▶</span>
+                      Partial Discovery: {bom.discovery_errors.length} issue(s)
+                    </span>
+                    <span style={{ fontSize: 11, color: DS.error, opacity: 0.8 }}>{showDiscoveryErrors ? 'Collapse' : 'Expand'}</span>
+                  </button>
+                  {showDiscoveryErrors && (
+                    <div style={{ padding: '14px', animation: 'fade-up 0.25s ease both', color: DS.error, fontSize: 13, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: '400px', overflowY: 'auto' }}>
+                      {bom.discovery_errors.map((issue, i) => (
+                        <div key={i} style={{ display: 'flex', gap: 8 }}>
+                          <span style={{ opacity: 0.7, flexShrink: 0 }}>•</span>
+                          <span style={{ wordBreak: 'break-all' }}><strong>{issue.target}:</strong> {issue.error}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Algorithm Breakdown — collapsible */}
               <div
