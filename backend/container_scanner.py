@@ -236,6 +236,7 @@ async def scan_container_tar(tar_path: str, sensitive_keywords: list[str] | None
             "semgrep": semgrep_result,
             "binary_findings": binary_findings,
             "dependency_findings": dependency_findings,
+            "fs_dir": fs_dir,
         }
 
 

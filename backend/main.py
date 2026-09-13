@@ -126,8 +126,35 @@ def parse_context(value):
 
 def add_materials(bom, target):
     result = scan_materials(target)
-    bom['components'].extend(result['components'])
+    if result['components']:
+        bom['components'].extend(result['components'])
+        bom['summary']['total_findings'] = len(bom['components'])
+        bom['summary']['critical_count'] = sum(1 for c in bom['components'] if c.get("mosca", {}).get("risk_level") == "CRITICAL")
+        bom['summary']['low_count'] = sum(1 for c in bom['components'] if c.get("mosca", {}).get("risk_level") == "LOW")
     bom['discovery_errors'] = result['errors']
+    return bom
+
+def make_paths_relative(bom: dict, root_path: Path | str) -> dict:
+    root_str = str(root_path).replace('\\', '/')
+    if not root_str.endswith('/'):
+        root_str += '/'
+    for comp in bom.get('components', []):
+        for occ in comp.get('evidence', {}).get('occurrences', []):
+            loc = occ.get('location', '')
+            if loc:
+                loc_fwd = loc.replace('\\', '/')
+                if loc_fwd.startswith(root_str):
+                    occ['location'] = loc_fwd[len(root_str):]
+                elif loc_fwd == root_str.rstrip('/'):
+                    occ['location'] = '.'
+    for err in bom.get('discovery_errors', []):
+        t = err.get('target', '')
+        if t:
+            t_fwd = t.replace('\\', '/')
+            if t_fwd.startswith(root_str):
+                err['target'] = t_fwd[len(root_str):]
+            elif t_fwd == root_str.rstrip('/'):
+                err['target'] = '.'
     return bom
 
 # ── CORS — allow the Vite dev server (and any origin during development) ──────
@@ -367,6 +394,7 @@ async def scan(request: ScanRequest) -> dict:
         )
 
         bom = await run_in_threadpool(add_materials, bom, target)
+        bom = make_paths_relative(bom, target)
         return finalize_bom(bom, request.context)
 
     finally:
@@ -443,6 +471,7 @@ async def scan_binary_upload(file: UploadFile = File(...), context: str | None =
             "Binary BOM: %d component(s), %d CRITICAL",
             len(bom["components"]), bom["summary"]["critical_count"],
         )
+        bom = make_paths_relative(bom, Path(tmp_dir_obj.name))
         return finalize_bom(bom, scan_context)
 
     finally:
@@ -527,7 +556,12 @@ async def scan_container_upload(file: UploadFile = File(...), context: str | Non
             result["binary_findings"], source_type="container"
         )
         bom = merge_boms([semgrep_bom, binary_bom])
-        bom['components'].extend(result.get('materials', {}).get('components', []))
+        materials = result.get('materials', {}).get('components', [])
+        if materials:
+            bom['components'].extend(materials)
+            bom['summary']['total_findings'] = len(bom['components'])
+            bom['summary']['critical_count'] = sum(1 for c in bom['components'] if c.get("mosca", {}).get("risk_level") == "CRITICAL")
+            bom['summary']['low_count'] = sum(1 for c in bom['components'] if c.get("mosca", {}).get("risk_level") == "LOW")
         bom['discovery_errors'] = result.get('materials', {}).get('errors', [])
         bom["metadata"]["component"]["type"]    = "container"
         bom["metadata"]["component"]["name"]    = file.filename or "container-image"
@@ -536,6 +570,8 @@ async def scan_container_upload(file: UploadFile = File(...), context: str | Non
             "Container BOM: %d component(s), %d CRITICAL",
             len(bom["components"]), bom["summary"]["critical_count"],
         )
+        if 'fs_dir' in result:
+            bom = make_paths_relative(bom, result['fs_dir'])
         return finalize_bom(bom, scan_context)
 
     finally:
@@ -580,7 +616,12 @@ async def scan_container_by_tag(request: ContainerTagRequest) -> dict:
         result["binary_findings"], source_type="container"
     )
     bom = merge_boms([semgrep_bom, binary_bom])
-    bom['components'].extend(result.get('materials', {}).get('components', []))
+    materials = result.get('materials', {}).get('components', [])
+    if materials:
+        bom['components'].extend(materials)
+        bom['summary']['total_findings'] = len(bom['components'])
+        bom['summary']['critical_count'] = sum(1 for c in bom['components'] if c.get("mosca", {}).get("risk_level") == "CRITICAL")
+        bom['summary']['low_count'] = sum(1 for c in bom['components'] if c.get("mosca", {}).get("risk_level") == "LOW")
     bom['discovery_errors'] = result.get('materials', {}).get('errors', [])
     bom["metadata"]["component"]["type"] = "container"
     bom["metadata"]["component"]["name"] = request.image_tag
@@ -589,6 +630,8 @@ async def scan_container_by_tag(request: ContainerTagRequest) -> dict:
         "Container tag BOM (%s): %d component(s), %d CRITICAL",
         request.image_tag, len(bom["components"]), bom["summary"]["critical_count"],
     )
+    if 'fs_dir' in result:
+        bom = make_paths_relative(bom, result['fs_dir'])
     return finalize_bom(bom, request.context)
 
 @app.post(
@@ -686,6 +729,7 @@ async def scan_upload(file: UploadFile = File(...), context: str | None = Form(N
         )
 
         bom = await run_in_threadpool(add_materials, bom, extract_dir)
+        bom = make_paths_relative(bom, extract_dir)
         return finalize_bom(bom, scan_context)
 
     finally:
