@@ -264,6 +264,16 @@ export default function HistoryPanel({ userId, onLoadScan }) {
                 fontSize: 11, color: DS.secondary,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>
+                {typeof entry.target === 'string' && entry.target.startsWith('github:') && (
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, marginRight: 6,
+                    padding: '1px 6px', borderRadius: 9999,
+                    background: `${DS.primary}18`, color: DS.primary,
+                    border: `1px solid ${DS.primary}30`,
+                  }}>
+                    GitHub
+                  </span>
+                )}
                 {entry.target || 'unknown'}
               </span>
 

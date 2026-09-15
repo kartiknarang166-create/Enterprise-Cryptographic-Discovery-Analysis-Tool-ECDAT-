@@ -53,7 +53,7 @@ import secrets
 from pathlib import Path
 
 import json
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status, Request
 from fastapi.responses import JSONResponse
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
@@ -73,6 +73,21 @@ from core.context import ScanContext
 from core.material_scanner import scan_materials
 from core.cbom import finalize_bom
 from core.enterprise import router as enterprise_router
+from ntro_auth import router as ntro_router
+from github_auth import (
+    router as github_router,
+    get_authorization,
+    github_get,
+    validate_full_name,
+    validate_ref,
+)
+from github_fetch import (
+    checkout_ref,
+    clone_url_for,
+    clone_with_token,
+    resolve_commit_sha,
+)
+from ntro_auth import require_ntro_employee
 from binary_scanner import scan_binary
 from container_scanner import (
     scan_container_tar,
@@ -103,6 +118,8 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 app.include_router(enterprise_router)
+app.include_router(ntro_router)
+app.include_router(github_router)
 
 
 @app.middleware('http')
@@ -196,6 +213,13 @@ class ContainerTagRequest(BaseModel):
         if not v:
             raise ValueError("image_tag must not be empty")
         return v
+
+
+class GithubScanRequest(BaseModel):
+    repository: str
+    ref: str | None = None
+    context: ScanContext | None = None
+    sensitive_keywords: list[str] | None = None
 
 
 class DockerStatusResponse(BaseModel):
@@ -738,6 +762,110 @@ async def scan_upload(file: UploadFile = File(...), context: str | None = Form(N
             logger.info("Upload temp directory cleaned up.")
         except Exception as cleanup_err:
             logger.warning("Failed to clean up upload temp dir: %s", cleanup_err)
+
+
+@app.post(
+    "/scan/github",
+    tags=["scanner"],
+    summary="Scan an authorized private GitHub repository (NTRO session + GitHub connection required)",
+    response_description="CycloneDX 1.6 BOM with cryptographic findings + GitHub provenance",
+)
+async def scan_github(request: GithubScanRequest, employee: dict = Depends(require_ntro_employee)) -> dict:
+    """
+    Authorized-private-repository adapter — NOT a second scanner.
+
+    Validates the NTRO session, validates the server-side GitHub
+    authorization, verifies the selected repository is actually accessible
+    to that authorization, shallow-clones into a temporary workspace with
+    the existing extra-header credential model, then runs the EXACT same
+    pipeline as POST /scan (Semgrep → sensitive correlation → SCA →
+    CycloneDX → materials → finalize_bom). The temp workspace is always
+    cleaned up. The token never leaves the backend.
+    """
+    from github_auth import _redacted_error
+
+    full_name = validate_full_name(request.repository)
+    ref = validate_ref(request.ref)
+
+    auth = get_authorization(employee["employee_id"])
+    if auth is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="GitHub not connected. Connect GitHub first.",
+        )
+    access_token = auth["access_token"]
+
+    # Server-side authorization check — never trust the browser's repo value.
+    check = await run_in_threadpool(github_get, access_token, f"/repos/{full_name}")
+    if check.status_code != 200:
+        raise _redacted_error(check.status_code)
+    try:
+        actual_full_name = check.json().get("full_name", full_name)
+    except Exception:
+        actual_full_name = full_name
+    default_branch = None
+    try:
+        default_branch = check.json().get("default_branch")
+    except Exception:
+        default_branch = None
+
+    tmp_dir_obj = tempfile.TemporaryDirectory(prefix="ecdat_github_")
+    try:
+        clone_dest = Path(tmp_dir_obj.name) / "repo"
+        await run_in_threadpool(
+            clone_with_token, clone_url_for(actual_full_name), clone_dest, access_token
+        )
+        if ref:
+            await run_in_threadpool(checkout_ref, clone_dest, ref)
+        target = clone_dest
+
+        commit_sha = await run_in_threadpool(resolve_commit_sha, target)
+        sha_short = (commit_sha or "")[:12] or "unknown"
+
+        semgrep_result = await run_semgrep_scan(str(target))
+        if semgrep_result.get("error"):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=semgrep_result.get("message", "Scanner error"),
+            )
+
+        keywords = request.sensitive_keywords or [
+            "password", "ssn", "credit_card", "token", "secret", "jwt", "email", "medical_record"
+        ]
+        sensitive_findings = await run_in_threadpool(scan_for_sensitive_data, str(target), keywords)
+        if "results" in semgrep_result:
+            semgrep_result["results"] = correlate_and_escalate(semgrep_result["results"], sensitive_findings)
+
+        dependency_findings = await run_in_threadpool(scan_dependencies, str(target))
+        logger.info("GitHub SCA complete — %d finding(s)", len(dependency_findings))
+
+        bom = transform_semgrep_to_cyclonedx(semgrep_result, dependency_findings)
+
+        # ── Safe provenance (non-secret only; tokens NEVER enter the BOM) ──
+        bom["metadata"] = {"component": {"name": f"github:{actual_full_name}@{sha_short}",
+                                         "type": "application"}}
+        bom["coverage"] = [{
+            "target": f"github:{actual_full_name}@{sha_short}",
+            "findings": len(bom.get("components", [])),
+            "errors": 0,
+            "sourceType": "github",
+            "provider": "github",
+            "repository": actual_full_name,
+            "ref": ref or default_branch or "",
+            "commitSha": commit_sha or "",
+        }]
+
+        bom = await run_in_threadpool(add_materials, bom, target)
+        # add_materials() overwrites discovery_errors only; re-attach coverage
+        # provenance if a future refactor drops unknown keys (defensive).
+        finalized = finalize_bom(bom, request.context)
+        return finalized
+    finally:
+        try:
+            tmp_dir_obj.cleanup()
+            logger.info("GitHub temporary workspace cleaned up.")
+        except Exception as cleanup_err:
+            logger.warning("Failed to clean up GitHub temp dir: %s", cleanup_err)
 
 
 # ── Dev entry point ───────────────────────────────────────────────────────────
