@@ -12,7 +12,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { Clock, Trash2, RefreshCw, ChevronRight, Shield, AlertTriangle, Database } from 'lucide-react'
+import { Clock, Trash2, RefreshCw, ChevronRight, Shield, AlertTriangle, Database, WifiOff } from 'lucide-react'
 import { getHistory, deleteHistoryEntry } from '../supabase'
 
 const DS = {
@@ -53,14 +53,16 @@ export default function HistoryPanel({ userId, onLoadScan }) {
   const [error,      setError]      = useState(null)
   const [deletingId, setDeletingId] = useState(null)
   const [hovered,    setHovered]    = useState(null)
+  const [fromCache,  setFromCache]  = useState(false)
 
   const fetchHistory = useCallback(async () => {
     if (!userId) { setLoading(false); return }
     setLoading(true); setError(null)
-    const { data, error: err } = await getHistory(userId)
+    const { data, error: err, fromCache: cached } = await getHistory(userId)
     setLoading(false)
     if (err) return setError(err.message)
     setHistory(data || [])
+    setFromCache(!!cached)
   }, [userId])
 
   useEffect(() => { fetchHistory() }, [fetchHistory])
@@ -69,7 +71,7 @@ export default function HistoryPanel({ userId, onLoadScan }) {
     e.stopPropagation()
     if (!window.confirm('Delete this scan from history?')) return
     setDeletingId(id)
-    await deleteHistoryEntry(id)
+    await deleteHistoryEntry(id, userId)
     setHistory(prev => prev.filter(h => h.id !== id))
     setDeletingId(null)
   }
@@ -96,6 +98,12 @@ export default function HistoryPanel({ userId, onLoadScan }) {
   if (loading) {
     return (
       <div style={{ ...containerStyle, alignItems: 'center', justifyContent: 'center' }}>
+        <style>{`
+          @keyframes spin-history {
+            from { transform: rotate(0deg) }
+            to   { transform: rotate(360deg) }
+          }
+        `}</style>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, color: DS.muted }}>
           <svg style={{ width: 28, height: 28, animation: 'spin-history 1s linear infinite' }} viewBox="0 0 24 24" fill="none">
             <circle cx="12" cy="12" r="10" stroke={`${DS.primary}30`} strokeWidth="2" />
@@ -147,6 +155,19 @@ export default function HistoryPanel({ userId, onLoadScan }) {
 
   return (
     <div style={containerStyle}>
+      {/* Offline / cached-data notice */}
+      {fromCache && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 14px', borderRadius: 6, marginBottom: 12,
+          background: `${DS.tertiary}12`, border: `1px solid ${DS.tertiary}40`,
+          color: DS.tertiary, fontSize: 12,
+        }}>
+          <WifiOff size={13} style={{ flexShrink: 0 }} />
+          <span>You're offline — showing locally cached scan history.</span>
+        </div>
+      )}
+
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -289,13 +310,6 @@ export default function HistoryPanel({ userId, onLoadScan }) {
       <p style={{ fontSize: 11, color: DS.muted, marginTop: 10, textAlign: 'right' }}>
         Click any row to reload that scan into the dashboard.
       </p>
-
-      <style>{`
-        @keyframes spin-history {
-          from { transform: rotate(0deg) }
-          to   { transform: rotate(360deg) }
-        }
-      `}</style>
     </div>
   )
 }

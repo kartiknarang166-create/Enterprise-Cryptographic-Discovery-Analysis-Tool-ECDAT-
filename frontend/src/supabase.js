@@ -51,6 +51,44 @@ export const supabase = isConfigured
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : createNoOpClient()
 
+// ── Offline history cache (localStorage) ──────────────────────────────────────
+// Cache is per-user so multiple accounts on the same device don't share history.
+
+function cacheKey(userId) {
+  return `ecdat_history_${userId}`
+}
+
+function readCache(userId) {
+  try {
+    const raw = localStorage.getItem(cacheKey(userId))
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function writeCache(userId, entries) {
+  try {
+    localStorage.setItem(cacheKey(userId), JSON.stringify(entries))
+  } catch (e) {
+    console.warn('[ECDAT] Failed to write history cache:', e)
+  }
+}
+
+/** Prepend a single entry to the user's localStorage cache. */
+function prependToCache(userId, entry) {
+  const existing = readCache(userId)
+  // Avoid duplicates (e.g. if save is called twice)
+  const deduped  = existing.filter(e => e.id !== entry.id)
+  writeCache(userId, [entry, ...deduped])
+}
+
+/** Remove a single entry from the localStorage cache by id. */
+export function removeFromCache(userId, id) {
+  const existing = readCache(userId)
+  writeCache(userId, existing.filter(e => e.id !== id))
+}
+
 // ── History helpers ────────────────────────────────────────────────────────────
 
 /**
@@ -79,6 +117,20 @@ export async function saveHistoryEntry(bom, target, userId) {
   const critical   = summary.critical_count  ??
     components.filter(c => c.mosca?.risk_level === 'CRITICAL').length
 
+  // Build the entry optimistically so we can always cache it.
+  const optimisticEntry = {
+    id:         crypto.randomUUID(),
+    scanned_at: new Date().toISOString(),
+    target:     target || 'unknown',
+    total,
+    critical,
+    bom_json:   cleanBom,
+  }
+
+  // Pre-cache immediately (even before Supabase responds) so the scan is
+  // visible in the History panel during the same offline/online session.
+  prependToCache(userId, optimisticEntry)
+
   const { data, error } = await supabase
     .from('scan_history')
     .insert({
@@ -91,7 +143,14 @@ export async function saveHistoryEntry(bom, target, userId) {
     .select()
     .single()
 
-  if (error) console.error('[ECDAT] Failed to save scan history:', error.message)
+  if (error) {
+    console.error('[ECDAT] Failed to save scan history:', error.message)
+  } else if (data) {
+    // Replace the optimistic entry with the real server row (has correct id).
+    removeFromCache(userId, optimisticEntry.id)
+    prependToCache(userId, data)
+  }
+
   return { data, error }
 }
 
@@ -100,21 +159,67 @@ export async function saveHistoryEntry(bom, target, userId) {
  * @param {string} userId
  */
 export async function getHistory(userId) {
-  if (!isConfigured || !userId) return { data: [], error: null }
+  if (!userId) return { data: [], error: null }
 
-  return supabase
-    .from('scan_history')
-    .select('id, scanned_at, target, total, critical, bom_json')
-    .eq('user_id', userId)
-    .order('scanned_at', { ascending: false })
+  // If the browser is offline or Supabase is not configured, serve from cache.
+  if (!navigator.onLine || !isConfigured) {
+    const cached = readCache(userId)
+    return { data: cached, error: null, fromCache: true }
+  }
+
+  try {
+    // Race the Supabase request against a 5-second timeout.
+    // This prevents an endless loading spinner if the venue has a captive portal
+    // or if Supabase is slow/unreachable even though navigator.onLine is true.
+    const timeoutMs = 5000
+    const abortCtrl = new AbortController()
+    const timeoutId = setTimeout(() => abortCtrl.abort(), timeoutMs)
+
+    let result
+    try {
+      result = await supabase
+        .from('scan_history')
+        .select('id, scanned_at, target, total, critical, bom_json')
+        .eq('user_id', userId)
+        .order('scanned_at', { ascending: false })
+        .abortSignal(abortCtrl.signal)
+    } finally {
+      clearTimeout(timeoutId)
+    }
+
+    if (result.error) {
+      // Network / Supabase error — fall back to cache
+      console.warn('[ECDAT] getHistory failed, serving from cache:', result.error.message)
+      const cached = readCache(userId)
+      return { data: cached, error: null, fromCache: true }
+    }
+
+    // Success — persist fresh data to cache for next offline session
+    writeCache(userId, result.data || [])
+    return { ...result, fromCache: false }
+  } catch (err) {
+    // Unexpected fetch failure or timeout (e.g. DNS failure / abort)
+    console.warn('[ECDAT] getHistory threw, serving from cache:', err)
+    const cached = readCache(userId)
+    return { data: cached, error: null, fromCache: true }
+  }
 }
 
 /**
  * Delete a single history entry by ID (only the owner can do this via RLS).
  * @param {string} id — UUID of the scan_history row
  */
-export async function deleteHistoryEntry(id) {
+export async function deleteHistoryEntry(id, userId) {
+  // Always remove from local cache first so the UI reflects the change offline.
+  if (userId) removeFromCache(userId, id)
+
   if (!isConfigured || !id) return { error: 'not configured' }
+
+  if (!navigator.onLine) {
+    // Offline — cache already updated, signal success.
+    return { data: null, error: null }
+  }
+
   return supabase.from('scan_history').delete().eq('id', id)
 }
 
